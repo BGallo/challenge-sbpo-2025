@@ -218,6 +218,90 @@ public class ChallengeSolver {
         
     }
 
+   /*  public ArrayList<ArrayList<Boolean>> generateInitialPopulation(int size){
+
+        ArrayList<ArrayList<boolean>> population;
+        Map<Integer,Integer> itemSums = new Map<>();
+        int index = 0;
+        for(Map<Integer,Integer> order:this.orders){
+            int total = order.values().stream().mapToInt(Integer::intValue).sum();
+            itemSums.put(index++,total);
+        }
+        for(int i = 0; i < size; i++){
+            int waveSize = 0;
+            List<Map.Entry<K,V>> sorted = itemSums.entrySet().stream().sorted(Map.Entry.comparingByValue()).collect(Collectors.toList());
+
+            ArrayList<boolean> individual;
+            while (waveSize < this.waveSizeUB){
+                Random random = new Random();
+                if(random.nextInt()){
+                    int order = random.nextInt(sorted.lenght);
+                    int selectedOrderIndex = sorted[order].getKey();
+                    Map<Integer, Integer> selectedOrder = this.orders[selectedOrderIndex];
+                }
+            }
+        }
+
+        ArrayList<ArrayList<Boolean>> population = new ArrayList<>();
+        Random rand = new Random();
+
+        for (int i = 0; i < size; i++) {
+            ArrayList<Boolean> individual = new ArrayList<>(Collections.nCopies(orders.size() + aisles.size(), false));
+            Set<Integer> selectedOrders = new HashSet<>();
+            Set<Integer> selectedAisles = new HashSet<>();
+            Map<Integer, Integer> itemAvailability = new HashMap<>();
+            int totalItems = 0;
+            boolean foundItem = true;
+            int oldTotalItems = 0;
+            System.out.println("i:"+i);
+            while (totalItems < waveSizeUB && foundItem) {
+                int orderIndex = rand.nextInt(orders.size());
+                if (selectedOrders.contains(orderIndex)) continue;
+
+                Map<Integer, Integer> order = orders.get(orderIndex);
+                int orderItems = order.values().stream().mapToInt(Integer::intValue).sum();
+
+                if (totalItems + orderItems > waveSizeUB) continue;
+
+                selectedOrders.add(orderIndex);
+                individual.set(orderIndex, true);
+                oldTotalItems=totalItems;
+                totalItems += orderItems;
+                System.out.println(totalItems);
+
+                if(totalItems==oldTotalItems){
+                    System.out.println("chegou aqui");
+                    foundItem = false;
+                    break;
+                };
+                System.out.println(foundItem);
+                for (Map.Entry<Integer, Integer> entry : order.entrySet()) {
+                    int item = entry.getKey();
+                    int quantity = entry.getValue();
+                    int remainingNeeded = quantity - itemAvailability.getOrDefault(item, 0);
+
+                    if (remainingNeeded > 0) {
+                        for (int aisleIndex = 0; aisleIndex < aisles.size(); aisleIndex++) {
+                            if (selectedAisles.contains(aisleIndex)) continue;
+
+                            Map<Integer, Integer> aisle = aisles.get(aisleIndex);
+                            if (aisle.containsKey(item)) {
+                                selectedAisles.add(aisleIndex);
+                                individual.set(orders.size() + aisleIndex, true);
+                                int aisleQuantity = aisle.get(item);
+                                itemAvailability.put(item, itemAvailability.getOrDefault(item, 0) + aisleQuantity);
+
+                                if (itemAvailability.get(item) >= quantity) break;
+                            }
+                        }
+                    }
+                }
+            }
+            population.add(individual);
+        }
+        return population;
+    } */
+
     /*
      * Get the remaining time in seconds
      */
