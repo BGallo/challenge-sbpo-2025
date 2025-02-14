@@ -1,5 +1,6 @@
 package org.sbpo2025.challenge;
-
+import com.google.ortools.Loader;
+import com.google.ortools.sat.*;
 import org.apache.commons.lang3.time.StopWatch;
 
 import java.util.ArrayList;
@@ -42,53 +43,129 @@ public class ChallengeSolver {
     }
 
     public ChallengeSolution solve(StopWatch stopWatch) {
-        final int populationSize = 100;
-        final int maxIterations = Integer.MAX_VALUE;
+        Loader.loadNativeLibraries();
+        CpModel model = new CpModel();
 
-        //Generates the initial population
-        ArrayList<Individual> population = this.generateInitialPopulation(populationSize);
-        
-        //Evaluates the population
-        double bestScore;
-        ChallengeSolution bestSolution;
+        int nOrders = orders.size();
+        int nAisles = aisles.size();
 
-        for(Individual individual: population){
-            ChallengeSolution solution = this.decodeIndividual(individual);
-            individual.fitness = this.computeObjectiveFunction(solution);
+        // Order selection variables
+        IntVar[] orderVars = new IntVar[nOrders];
+        for (int i = 0; i < nOrders; i++) {
+            orderVars[i] = model.newBoolVar("order_" + i);
         }
 
-        population.sort((a, b) -> Double.compare(b.fitness, a.fitness));
+        // Constraint: The number of selected orders must be between waveSizeLB and waveSizeUB
+        IntVar numOrdersInWave = model.newIntVar(waveSizeLB, waveSizeUB, "num_orders_in_wave");
+        model.addEquality(LinearExpr.sum(orderVars), numOrdersInWave);
 
-        bestScore = population.get(0).fitness;
-        bestSolution = this.decodeIndividual(population.get(0));
-        System.out.println("Initial best score: " + bestScore);
+        // Aisle selection variables
+        IntVar[] aisleVars = new IntVar[nAisles];
+        for (int j = 0; j < nAisles; j++) {
+            aisleVars[j] = model.newBoolVar("aisle_" + j);
+        }
 
-        int currentIteration = 0;
-        //Main loop
-        while(stopWatch.getTime() < MAX_RUNTIME && currentIteration < maxIterations){
-            currentIteration++;
-
-            //One point crossover
-            population = crossOverPopulation(population);
-
-            for(Individual individual: population){
-                ChallengeSolution solution = this.decodeIndividual(individual);
-                individual.fitness = this.computeObjectiveFunction(solution);
+        // Ensure an aisle is visited if any order in it is selected
+        for (int j = 0; j < nAisles; j++) {
+            List<IntVar> relevantOrders = new ArrayList<>();
+            for (int i = 0; i < nOrders; i++) {
+                if (orders.get(i).containsKey(j)) {
+                    relevantOrders.add(orderVars[i]);
+                }
             }
-
-            population.sort((a, b) -> Double.compare(b.fitness, a.fitness));
-
-            //Elitist population selection
-            population.subList(populationSize, population.size()).clear();
-
-            if(population.get(0).fitness > bestScore){
-                bestScore = population.get(0).fitness;
-                bestSolution = this.decodeIndividual(population.get(0));
+            if (!relevantOrders.isEmpty()) {
+                model.addGreaterOrEqual(LinearExpr.sum(relevantOrders.toArray(new IntVar[0])), aisleVars[j]);
             }
         }
 
-        System.out.println("Best score: " + bestScore);
-        return bestSolution;
+        // Total units picked variable
+        IntVar totalUnitsPicked = model.newIntVar(waveSizeLB, waveSizeUB, "total_units_picked");
+        List<IntVar> pickedUnits = new ArrayList<>();
+
+        for (int i = 0; i < nOrders; i++) {
+            int orderTotal = orders.get(i).values().stream().mapToInt(Integer::intValue).sum();
+            if (orderTotal > 0) {
+                IntVar picked = model.newIntVar(0, orderTotal, "picked_units_" + i);
+                pickedUnits.add(picked);
+                model.addMultiplicationEquality(picked, new IntVar[]{orderVars[i], model.newConstant(orderTotal)});
+            }
+        }
+        model.addEquality(LinearExpr.sum(pickedUnits.toArray(new IntVar[0])), totalUnitsPicked);
+
+        // Constraint: Units picked cannot exceed available stock
+        for (int item = 0; item < nItems; item++) {
+            int finalItem = item;
+            int totalAvailable = aisles.stream().mapToInt(a -> a.getOrDefault(finalItem, 0)).sum();
+            if (totalAvailable > 0) {
+                IntVar totalPicked = model.newIntVar(0, totalAvailable, "total_picked_item_" + item);
+                List<IntVar> pickedPerOrder = new ArrayList<>();
+
+                for (int i = 0; i < nOrders; i++) {
+                    int pickedAmount = orders.get(i).getOrDefault(item, 0);
+                    if (pickedAmount > 0) {
+                        IntVar pickedVar = model.newIntVar(0, pickedAmount, "picked_item_" + item + "_order_" + i);
+                        pickedPerOrder.add(pickedVar);
+                        model.addMultiplicationEquality(pickedVar, new IntVar[]{orderVars[i], model.newConstant(pickedAmount)});
+                    }
+                }
+                model.addEquality(LinearExpr.sum(pickedPerOrder.toArray(new IntVar[0])), totalPicked);
+                model.addLessOrEqual(totalPicked, totalAvailable);
+            }
+        }
+
+        // Ensure feasibility: picked items <= available items in visited aisles
+        for (int item = 0; item < nItems; item++) {
+            int finalItem = item;
+            int totalStock = aisles.stream().mapToInt(a -> a.getOrDefault(finalItem, 0)).sum();
+            if (totalStock > 0) {
+                IntVar pickedForItem = model.newIntVar(0, totalStock, "picked_for_item_" + item);
+                List<IntVar> pickingOrders = new ArrayList<>();
+
+                for (int i = 0; i < nOrders; i++) {
+                    int orderQuantity = orders.get(i).getOrDefault(item, 0);
+                    if (orderQuantity > 0) {
+                        IntVar orderPicked = model.newIntVar(0, orderQuantity, "picked_item_" + item + "_order_" + i);
+                        pickingOrders.add(orderPicked);
+                        model.addMultiplicationEquality(orderPicked, new IntVar[]{orderVars[i], model.newConstant(orderQuantity)});
+                    }
+                }
+                model.addEquality(LinearExpr.sum(pickingOrders.toArray(new IntVar[0])), pickedForItem);
+                model.addLessOrEqual(pickedForItem, totalStock);
+            }
+        }
+
+        // Minimize the number of aisles visited while maximizing total units picked
+        IntVar numVisitedAisles = model.newIntVar(1, nAisles, "num_visited_aisles");
+        model.addEquality(LinearExpr.sum(aisleVars), numVisitedAisles);
+
+        int scalingFactor = 100;
+        IntVar scaledTotalUnits = model.newIntVar(0, Integer.MAX_VALUE, "scaled_total_units");
+        model.addMultiplicationEquality(scaledTotalUnits, new IntVar[]{totalUnitsPicked, model.newConstant(scalingFactor)});
+        model.maximize(LinearExpr.sum(new IntVar[]{scaledTotalUnits, model.newConstant(-numVisitedAisles.getIndex())}));
+
+        // Solve the model
+        CpSolver solver = new CpSolver();
+        solver.getParameters().setMaxTimeInSeconds(600);  // Set a time limit
+        CpSolverStatus status = solver.solve(model);
+
+        // Extract solution if feasible
+        if (status == CpSolverStatus.OPTIMAL || status == CpSolverStatus.FEASIBLE) {
+            Set<Integer> selectedOrders = new HashSet<>();
+            Set<Integer> selectedAisles = new HashSet<>();
+            for (int i = 0; i < nOrders; i++) {
+                if (solver.value(orderVars[i]) == 1) {
+                    selectedOrders.add(i);
+                }
+            }
+            for (int j = 0; j < nAisles; j++) {
+                if (solver.value(aisleVars[j]) == 1) {
+                    selectedAisles.add(j);
+                }
+            }
+            return new ChallengeSolution(selectedOrders, selectedAisles);
+        } else {
+            return null;  // No feasible solution found
+        }
     }
 
     public ArrayList<Individual> generateInitialPopulation(int size) {
@@ -113,7 +190,7 @@ public class ChallengeSolver {
                 int orderIndex = rand.nextInt(localOrderIndexes.size());
                 int pickedOrder = localOrderIndexes.get(orderIndex);
                 int orderUnitsSum = orders.get(pickedOrder).values().stream().mapToInt(Integer::intValue).sum();
-                
+
                 localOrderIndexes.remove(orderIndex);
 
                 if (pickedUnits + orderUnitsSum > waveSizeUB) continue;
@@ -140,7 +217,7 @@ public class ChallengeSolver {
                         }
                     }
 
-                }      
+                }
             }
             population.add(new Individual(genome, -1));
         }
