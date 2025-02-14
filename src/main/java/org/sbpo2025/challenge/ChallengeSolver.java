@@ -14,7 +14,7 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 public class ChallengeSolver {
-    private final long MAX_RUNTIME = 30000; // milliseconds; 30 s
+    private final long MAX_RUNTIME = 10000; // milliseconds; 30 s
 
     protected List<Map<Integer, Integer>> orders;
     protected List<Map<Integer, Integer>> aisles;
@@ -42,7 +42,7 @@ public class ChallengeSolver {
     }
 
     public ChallengeSolution solve(StopWatch stopWatch) {
-        final int populationSize = 10;
+        final int populationSize = 40;
         final int maxIterations = Integer.MAX_VALUE;
 
         //Generates the initial population
@@ -63,6 +63,8 @@ public class ChallengeSolver {
         bestScore = population.get(0).fitness;
         bestSolution = this.decodeIndividual(population.get(0));
         System.out.println("Initial best score: " + bestScore);
+        System.out.println("Is Initial best score feasible: " + isSolutionFeasible(bestSolution, true));
+        //System.out.println("Initial Best solution: " + bestSolution);
 
         int currentIteration = 0;
         //Main loop
@@ -90,6 +92,8 @@ public class ChallengeSolver {
         }
 
         System.out.println("Best score: " + bestScore);
+        //System.out.println("Best solution: " + bestSolution);
+        System.out.println("Is Best solution feasible: " + isSolutionFeasible(bestSolution, true));
         return bestSolution;
     }
 
@@ -120,8 +124,8 @@ public class ChallengeSolver {
 
                 if (pickedUnits + orderUnitsSum > waveSizeUB) continue;
 
-                pickedUnits += orderUnitsSum;
-                genome.set(pickedOrder, true);
+                int satisfiedItems = 0;
+                int totalItems = orders.get(pickedOrder).size();
 
                 for(Map.Entry<Integer, Integer> entry: orders.get(pickedOrder).entrySet()){
                     int item = entry.getKey();
@@ -137,11 +141,17 @@ public class ChallengeSolver {
                             int newItemInAisleAmount = Math.min(amountAvailableInAisle, amountTakenFromItemInAisle + quantity);
                             unitsTakenFromAisles.get(aisleIndex).put(item, newItemInAisleAmount);
                             genome.set(orders.size() + aisleIndex, true);
-                            if (amountTakenFromItemInAisle + quantity < amountAvailableInAisle) break;
+                            if (amountTakenFromItemInAisle + quantity <= amountAvailableInAisle) {
+                                satisfiedItems++;
+                                break;
+                            }
                             quantity -= amountAvailableInAisle - amountTakenFromItemInAisle;
                         }
                     }
-
+                }
+                if (satisfiedItems == totalItems) {
+                    pickedUnits += orderUnitsSum;
+                    genome.set(pickedOrder, true);
                 }      
             }
             population.add(new Individual(genome, -1));
@@ -189,8 +199,16 @@ public class ChallengeSolver {
     public void mutate(Individual individual) {
         Random rand = new Random();
         if (rand.nextDouble() > 0.1) return;
-        int mutationPoint = rand.nextInt(individual.genome.size());
-        individual.genome.set(mutationPoint, !individual.genome.get(mutationPoint));
+        int numMutations = Math.max(1, individual.genome.size() / 10);
+        Set<Integer> mutationPoints = new HashSet<>();
+        
+        while (mutationPoints.size() < numMutations) {
+            mutationPoints.add(rand.nextInt(individual.genome.size()));
+        }
+        
+        for (int mutationPoint : mutationPoints) {
+            individual.genome.set(mutationPoint, !individual.genome.get(mutationPoint));
+        }
     }
 
     /*
@@ -311,7 +329,7 @@ public class ChallengeSolver {
                 0);
     }
 
-    protected boolean isSolutionFeasible(ChallengeSolution challengeSolution) {
+    protected boolean isSolutionFeasible(ChallengeSolution challengeSolution, boolean print) {
         Set<Integer> selectedOrders = challengeSolution.orders();
         Set<Integer> visitedAisles = challengeSolution.aisles();
         if (selectedOrders == null || visitedAisles == null || selectedOrders.isEmpty() || visitedAisles.isEmpty()) {
@@ -337,13 +355,25 @@ public class ChallengeSolver {
 
         // Check if the total units picked are within bounds
         int totalUnits = Arrays.stream(totalUnitsPicked).sum();
-        if (totalUnits < waveSizeLB || totalUnits > waveSizeUB) {
+        if (totalUnits < waveSizeLB) {
+            if(print){
+                System.out.println("Motive: totalUnits < waveSizeLB");
+            }
+            return false;
+        }
+        if (totalUnits > waveSizeUB) {
+            if(print){
+                System.out.println("Motive: totalUnits < waveSizeLB");
+            }
             return false;
         }
 
         // Check if the units picked do not exceed the units available
         for (int i = 0; i < nItems; i++) {
             if (totalUnitsPicked[i] > totalUnitsAvailable[i]) {
+                if(print){
+                    System.out.println("Motive: More Picked Items than offered by Aisles");
+                }
                 return false;
             }
         }
@@ -359,8 +389,8 @@ public class ChallengeSolver {
         }
 
         int penalty = 0;
-        if (!isSolutionFeasible(challengeSolution)) {
-            penalty += -10;
+        if (!isSolutionFeasible(challengeSolution, false)) {
+            penalty -= applyPenalty(challengeSolution);
         }
 
         int totalUnitsPicked = 0;
@@ -377,5 +407,48 @@ public class ChallengeSolver {
 
         // Objective function: total units picked / number of visited aisles
         return (double) (totalUnitsPicked / numVisitedAisles) + penalty;
+    }
+
+    protected int applyPenalty(ChallengeSolution challengeSolution){
+        int penalty = 0;
+        Set<Integer> selectedOrders = challengeSolution.orders();
+        Set<Integer> visitedAisles = challengeSolution.aisles();
+
+        int[] totalUnitsPicked = new int[nItems];
+        int[] totalUnitsAvailable = new int[nItems];
+
+        // Calculate total units picked
+        for (int order : selectedOrders) {
+            for (Map.Entry<Integer, Integer> entry : orders.get(order).entrySet()) {
+                totalUnitsPicked[entry.getKey()] += entry.getValue();
+            }
+        }
+
+        // Calculate total units available
+        for (int aisle : visitedAisles) {
+            for (Map.Entry<Integer, Integer> entry : aisles.get(aisle).entrySet()) {
+                totalUnitsAvailable[entry.getKey()] += entry.getValue();
+            }
+        }
+
+        // Check if the total units picked are within bounds
+        int totalUnits = Arrays.stream(totalUnitsPicked).sum();
+        if (totalUnits < waveSizeLB) {
+            penalty += waveSizeLB - totalUnits;
+        }
+
+        if (totalUnits > waveSizeUB) {
+            penalty += totalUnits - waveSizeLB;
+        }
+
+        // Check if the units picked do not exceed the units available
+        for (int i = 0; i < nItems; i++) {
+            if (totalUnitsPicked[i] > totalUnitsAvailable[i]) {
+                penalty += totalUnitsPicked[i] - totalUnitsAvailable[i]; 
+            }
+        }
+
+        return penalty/10;
+
     }
 }
