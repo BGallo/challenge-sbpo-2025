@@ -14,7 +14,7 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 public class ChallengeSolver {
-    private final long MAX_RUNTIME = 10000; // milliseconds; 30 s
+    private final long MAX_RUNTIME = 30000; // milliseconds; 30 s
 
     protected List<Map<Integer, Integer>> orders;
     protected List<Map<Integer, Integer>> aisles;
@@ -61,9 +61,9 @@ public class ChallengeSolver {
 
         bestScore = population.get(0).fitness;
         bestSolution = this.decodeIndividual(population.get(0));
+
         System.out.println("Initial best score: " + bestScore);
-        System.out.println("Is Initial best score feasible: " + isSolutionFeasible(bestSolution, true));
-        //System.out.println("Initial Best solution: " + bestSolution);
+        System.out.println("is feaseble?" + isSolutionFeasible(bestSolution, true));
 
         int currentIteration = 0;
         //Main loop
@@ -80,18 +80,18 @@ public class ChallengeSolver {
 
             population.sort((a, b) -> Double.compare(b.fitness, a.fitness));
 
-            //Elitist population selection
-            population.subList(populationSize, population.size()).clear();
+            //Selects the next generation
+            chooseNextGeneration(population, populationSize, PopulationSelectionType.TOURNAMENT);
 
             if(population.get(0).fitness > bestScore){
                 bestScore = population.get(0).fitness;
                 bestSolution = this.decodeIndividual(population.get(0));
+                System.out.println("New best score achieved in iteration " + currentIteration + " best score: " + bestScore);
+                System.out.println("New solution: " + bestSolution);
+                System.out.println("is feaseble? " + isSolutionFeasible(bestSolution, true));
             }
         }
 
-        System.out.println("Best score: " + bestScore);
-        //System.out.println("Best solution: " + bestSolution);
-        System.out.println("Is Best solution feasible: " + isSolutionFeasible(bestSolution, true));
         return bestSolution;
     }
 
@@ -277,7 +277,7 @@ public class ChallengeSolver {
         }
         if (totalUnits > waveSizeUB) {
             if(print){
-                System.out.println("Motive: totalUnits < waveSizeLB");
+                System.out.println("Motive: totalUnits > waveSizeUB");
             }
             return false;
         }
@@ -348,21 +348,42 @@ public class ChallengeSolver {
         // Check if the total units picked are within bounds
         int totalUnits = Arrays.stream(totalUnitsPicked).sum();
         if (totalUnits < waveSizeLB) {
-            penalty += waveSizeLB - totalUnits;
+            penalty += (waveSizeLB - totalUnits) * nItems;
         }
 
         if (totalUnits > waveSizeUB) {
-            penalty += totalUnits - waveSizeLB;
+            penalty += (totalUnits - waveSizeLB) * nItems;
         }
 
         // Check if the units picked do not exceed the units available
         for (int i = 0; i < nItems; i++) {
             if (totalUnitsPicked[i] > totalUnitsAvailable[i]) {
-                penalty += totalUnitsPicked[i] - totalUnitsAvailable[i]; 
+                penalty += (totalUnitsPicked[i] - totalUnitsAvailable[i]) * nItems; 
             }
         }
 
-        return penalty/10;
+        return penalty;
 
+    }
+
+    public static enum PopulationSelectionType {
+        ELITIST, TOURNAMENT
+    }
+
+    public static void chooseNextGeneration(ArrayList<Individual> population, int populationSize, PopulationSelectionType selectionType) {
+        if (selectionType == PopulationSelectionType.ELITIST) {
+            population.subList(populationSize, population.size()).clear();
+        } else if (selectionType == PopulationSelectionType.TOURNAMENT) {
+            Random rand = new Random();
+            while (population.size() > populationSize) {
+                int index1 = rand.nextInt(population.size());
+                int index2 = rand.nextInt(population.size());
+                if (population.get(index1).fitness > population.get(index2).fitness) {
+                    population.remove(index2);
+                } else {
+                    population.remove(index1);
+                }
+            }
+        }
     }
 }
