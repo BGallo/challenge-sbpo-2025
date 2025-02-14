@@ -31,7 +31,7 @@ public class ChallengeSolver {
         this.waveSizeUB = waveSizeUB;
     }
 
-    public class Individual {
+    public static class Individual {
         protected ArrayList<Boolean> genome;
         protected double fitness;
 
@@ -42,20 +42,19 @@ public class ChallengeSolver {
     }
 
     public ChallengeSolution solve(StopWatch stopWatch) {
-        final int populationSize = 40;
+        final int populationSize = 100;
         final int maxIterations = Integer.MAX_VALUE;
 
         //Generates the initial population
         ArrayList<Individual> population = this.generateInitialPopulation(populationSize);
         
         //Evaluates the population
-        double bestScore = Integer.MIN_VALUE;
-        ChallengeSolution bestSolution = null;
+        double bestScore;
+        ChallengeSolution bestSolution;
 
         for(Individual individual: population){
             ChallengeSolution solution = this.decodeIndividual(individual);
-            double fitness = this.computeObjectiveFunction(solution);
-            individual.fitness = fitness;   
+            individual.fitness = this.computeObjectiveFunction(solution);
         }
 
         population.sort((a, b) -> Double.compare(b.fitness, a.fitness));
@@ -76,8 +75,7 @@ public class ChallengeSolver {
 
             for(Individual individual: population){
                 ChallengeSolution solution = this.decodeIndividual(individual);
-                double fitness = this.computeObjectiveFunction(solution);
-                individual.fitness = fitness;   
+                individual.fitness = this.computeObjectiveFunction(solution);
             }
 
             population.sort((a, b) -> Double.compare(b.fitness, a.fitness));
@@ -115,7 +113,7 @@ public class ChallengeSolver {
             List<Map<Integer, Integer>> unitsTakenFromAisles = new ArrayList<>(Collections.nCopies(aisles.size(), new HashMap<>()));
 
 
-            while (localOrderIndexes.size() > 0) {
+            while (!localOrderIndexes.isEmpty()) {
                 int orderIndex = rand.nextInt(localOrderIndexes.size());
                 int pickedOrder = localOrderIndexes.get(orderIndex);
                 int orderUnitsSum = orders.get(pickedOrder).values().stream().mapToInt(Integer::intValue).sum();
@@ -190,7 +188,7 @@ public class ChallengeSolver {
                 childGenome.add(parent2.genome.get(i));
             }
         }
-        Individual child =  new Individual(childGenome, -1);
+        Individual child = new Individual(childGenome, -1);
         mutate(child);
         return child;
     }
@@ -218,12 +216,12 @@ public class ChallengeSolver {
     public ArrayList<Individual> crossOverPopulation(ArrayList<Individual> population) {
         ArrayList<Individual> newPopulation = new ArrayList<>();
         Random rand = new Random();
-        while(population.size() > 0){
+        while(!population.isEmpty()){
             Individual parent1 = population.remove(0);
             Individual parent2;
             newPopulation.add(parent1);
             //biased for loop
-            if (population.size() == 0) break;
+            if (population.isEmpty()) break;
             for (int i = 0; i < population.size(); i++) {
                 if (rand.nextDouble() < 0.5 || i == population.size() - 1) {
                     parent2 = population.remove(i);
@@ -235,90 +233,6 @@ public class ChallengeSolver {
         return newPopulation;
         
     }
-
-   /*  public ArrayList<ArrayList<Boolean>> generateInitialPopulation(int size){
-
-        ArrayList<ArrayList<boolean>> population;
-        Map<Integer,Integer> itemSums = new Map<>();
-        int index = 0;
-        for(Map<Integer,Integer> order:this.orders){
-            int total = order.values().stream().mapToInt(Integer::intValue).sum();
-            itemSums.put(index++,total);
-        }
-        for(int i = 0; i < size; i++){
-            int waveSize = 0;
-            List<Map.Entry<K,V>> sorted = itemSums.entrySet().stream().sorted(Map.Entry.comparingByValue()).collect(Collectors.toList());
-
-            ArrayList<boolean> individual;
-            while (waveSize < this.waveSizeUB){
-                Random random = new Random();
-                if(random.nextInt()){
-                    int order = random.nextInt(sorted.lenght);
-                    int selectedOrderIndex = sorted[order].getKey();
-                    Map<Integer, Integer> selectedOrder = this.orders[selectedOrderIndex];
-                }
-            }
-        }
-
-        ArrayList<ArrayList<Boolean>> population = new ArrayList<>();
-        Random rand = new Random();
-
-        for (int i = 0; i < size; i++) {
-            ArrayList<Boolean> individual = new ArrayList<>(Collections.nCopies(orders.size() + aisles.size(), false));
-            Set<Integer> selectedOrders = new HashSet<>();
-            Set<Integer> selectedAisles = new HashSet<>();
-            Map<Integer, Integer> itemAvailability = new HashMap<>();
-            int totalItems = 0;
-            boolean foundItem = true;
-            int oldTotalItems = 0;
-            System.out.println("i:"+i);
-            while (totalItems < waveSizeUB && foundItem) {
-                int orderIndex = rand.nextInt(orders.size());
-                if (selectedOrders.contains(orderIndex)) continue;
-
-                Map<Integer, Integer> order = orders.get(orderIndex);
-                int orderItems = order.values().stream().mapToInt(Integer::intValue).sum();
-
-                if (totalItems + orderItems > waveSizeUB) continue;
-
-                selectedOrders.add(orderIndex);
-                individual.set(orderIndex, true);
-                oldTotalItems=totalItems;
-                totalItems += orderItems;
-                System.out.println(totalItems);
-
-                if(totalItems==oldTotalItems){
-                    System.out.println("chegou aqui");
-                    foundItem = false;
-                    break;
-                };
-                System.out.println(foundItem);
-                for (Map.Entry<Integer, Integer> entry : order.entrySet()) {
-                    int item = entry.getKey();
-                    int quantity = entry.getValue();
-                    int remainingNeeded = quantity - itemAvailability.getOrDefault(item, 0);
-
-                    if (remainingNeeded > 0) {
-                        for (int aisleIndex = 0; aisleIndex < aisles.size(); aisleIndex++) {
-                            if (selectedAisles.contains(aisleIndex)) continue;
-
-                            Map<Integer, Integer> aisle = aisles.get(aisleIndex);
-                            if (aisle.containsKey(item)) {
-                                selectedAisles.add(aisleIndex);
-                                individual.set(orders.size() + aisleIndex, true);
-                                int aisleQuantity = aisle.get(item);
-                                itemAvailability.put(item, itemAvailability.getOrDefault(item, 0) + aisleQuantity);
-
-                                if (itemAvailability.get(item) >= quantity) break;
-                            }
-                        }
-                    }
-                }
-            }
-            population.add(individual);
-        }
-        return population;
-    } */
 
     /*
      * Get the remaining time in seconds
