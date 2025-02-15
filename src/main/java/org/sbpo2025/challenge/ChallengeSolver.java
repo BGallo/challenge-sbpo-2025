@@ -380,6 +380,82 @@ public class ChallengeSolver {
 
     }
 
+    public Individual putMoreOrders(Individual individual) {
+        Map<Integer, Integer> usedItems = new HashMap<>();
+        int totalItems = 0;
+        
+        for (int i = 0; i < nItems; i++) {
+            usedItems.put(i, 0);
+        }
+        
+        for (int i = 0; i < orders.size(); i++) {
+            if (individual.genome.get(i)) {
+                Map<Integer, Integer> order = orders.get(i);
+                for (Map.Entry<Integer, Integer> entry : order.entrySet()) {
+                    usedItems.put(entry.getKey(), usedItems.get(entry.getKey()) + entry.getValue());
+                    totalItems += entry.getValue();
+                }
+            }
+        }
+
+        Map<Integer, Integer> availableItems = new HashMap<>();
+        
+        for (int i = 0; i < nItems; i++) {
+            availableItems.put(i, 0);
+        }
+        
+        for (int i = 0; i < aisles.size(); i++) {
+            if (individual.genome.get(orders.size() + i)) {
+                Map<Integer, Integer> aisle = aisles.get(i);
+                for (Map.Entry<Integer, Integer> entry : aisle.entrySet()) {
+                    availableItems.put(entry.getKey(), availableItems.get(entry.getKey()) + entry.getValue());
+                }
+            }
+        }
+
+        for (Map.Entry<Integer, Integer> entry : usedItems.entrySet()) {
+            availableItems.put(entry.getKey(), availableItems.get(entry.getKey()) - entry.getValue());
+        }
+        
+        boolean added;
+        do {
+            added = false;
+            
+            for (int i = 0; i < orders.size(); i++) {
+                if (!individual.genome.get(i)) {
+                    Map<Integer, Integer> order = orders.get(i);
+                    boolean canBeAdded = true;
+                    int orderTotalItems = 0;
+                    Map<Integer, Integer> tempAvailableItems = new HashMap<>(availableItems);
+                    
+                    for (Map.Entry<Integer, Integer> entry : order.entrySet()) {
+                        if (tempAvailableItems.get(entry.getKey()) < entry.getValue()) {
+                            canBeAdded = false;
+                            break;
+                        }
+                        tempAvailableItems.put(entry.getKey(), tempAvailableItems.get(entry.getKey()) - entry.getValue());
+                        orderTotalItems += entry.getValue();
+                    }
+                    
+                    if (canBeAdded && (totalItems + orderTotalItems) <= waveSizeUB) {
+                        individual.genome.set(i, true);
+                        totalItems += orderTotalItems;
+                        availableItems = tempAvailableItems;
+                        added = true;
+                    }
+                }
+            }
+        } while (added);
+        
+        individual.fitness = this.computeObjectiveFunction(decodeIndividual(individual));
+
+        return individual;
+    }
+    
+    
+    
+    
+
     /*
      * Get the remaining time in seconds
      */
