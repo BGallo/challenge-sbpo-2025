@@ -15,7 +15,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.*;
 
 public class ChallengeSolver {
-    private final long MAX_RUNTIME = 3000; // milliseconds; 30 s
+    private final long MAX_RUNTIME = 30000; // milliseconds; 30 s
     private final int NUM_THREADS = Runtime.getRuntime().availableProcessors();
     protected List<Map<Integer, Integer>> orders;
     protected List<Map<Integer, Integer>> aisles;
@@ -41,9 +41,6 @@ public class ChallengeSolver {
             this.fitness = fitness;
         }
 
-        public Individual() {
-
-        }
     }
     public Individual geneticAlgorithm(int populationSize,int maxIterations) {
         //Generates the initial population
@@ -63,8 +60,8 @@ public class ChallengeSolver {
         bestScore = population.get(0).fitness;
         bestSolution = this.decodeIndividual(population.get(0));
 
-        System.out.println("Initial best score: " + bestScore);
-        System.out.println("is feaseble?" + isSolutionFeasible(bestSolution, true));
+        //System.out.println("Initial best score: " + bestScore);
+        //System.out.println("is feaseble?" + isSolutionFeasible(bestSolution, true));
 
         int currentIteration = 0;
         //Main loop
@@ -89,9 +86,9 @@ public class ChallengeSolver {
             if (population.get(0).fitness > bestScore) {
                 bestScore = population.get(0).fitness;
                 bestSolution = this.decodeIndividual(population.get(0));
-                System.out.println("New best score achieved in iteration " + currentIteration + " best score: " + bestScore);
-                System.out.println("New solution: " + bestSolution);
-                System.out.println("is feasible? " + isSolutionFeasible(bestSolution, true));
+               // System.out.println("New best score achieved in iteration " + currentIteration + " best score: " + bestScore);
+                //System.out.println("New solution: " + bestSolution);
+                //System.out.println("is feasible? " + isSolutionFeasible(bestSolution, true));
             }
 
         }
@@ -105,7 +102,6 @@ public class ChallengeSolver {
         List<Future<Individual>> futures = new ArrayList<>();
         System.out.println("Iniciando busca com " + NUM_THREADS + " threads.");
         for (int i = 0; i < NUM_THREADS; i++) {
-            final int threadId = i; // Capturar ID da thread
             futures.add(executor.submit(() -> geneticAlgorithm(populationSize, maxIterations)));
         }
         Individual bestIndividual = null;
@@ -119,8 +115,12 @@ public class ChallengeSolver {
         } catch (InterruptedException | ExecutionException e) {
             System.err.println("Erro na busca: " + e.getMessage());
             e.printStackTrace();
-        };
-        System.out.println("Melhor individuo: " + decodeIndividual(bestIndividual) +" Score:" + bestIndividual.fitness);
+        }
+        if(bestIndividual != null) {
+
+            System.out.println("Melhor individuo: " + decodeIndividual(bestIndividual) +" Score:" + bestIndividual.fitness);
+        }
+        System.out.println("Levou:"+stopWatch.getDuration().getSeconds());
         return this.decodeIndividual(bestIndividual);
 
     }
