@@ -85,7 +85,6 @@ public class ChallengeSolver {
 
             if (population.get(0).fitness > bestScore) {
                 bestScore = population.get(0).fitness;
-                bestSolution = this.decodeIndividual(population.get(0));
                // System.out.println("New best score achieved in iteration " + currentIteration + " best score: " + bestScore);
                 //System.out.println("New solution: " + bestSolution);
                 //System.out.println("is feasible? " + isSolutionFeasible(bestSolution, true));
@@ -96,26 +95,10 @@ public class ChallengeSolver {
     }
 
     public ChallengeSolution solve(StopWatch stopWatch) {
-        final int populationSize = 50;
+        final int populationSize = 100;
         final int maxIterations = Integer.MAX_VALUE;
-        ExecutorService executor = Executors.newFixedThreadPool(NUM_THREADS);
-        List<Future<Individual>> futures = new ArrayList<>();
-        System.out.println("Iniciando busca com " + NUM_THREADS + " threads.");
-        for (int i = 0; i < NUM_THREADS; i++) {
-            futures.add(executor.submit(() -> geneticAlgorithm(populationSize, maxIterations)));
-        }
-        Individual bestIndividual = null;
-        try {
-            for (Future<Individual> future : futures) {
-                Individual candidate = future.get();
-                if (bestIndividual == null || (candidate != null && candidate.fitness > bestIndividual.fitness)) {
-                    bestIndividual = candidate;
-                }
-            }
-        } catch (InterruptedException | ExecutionException e) {
-            System.err.println("Erro na busca: " + e.getMessage());
-            e.printStackTrace();
-        }
+        Individual bestIndividual = geneticAlgorithm(populationSize, maxIterations);
+
         if(bestIndividual != null) {
 
             System.out.println("Melhor individuo: " + decodeIndividual(bestIndividual) +" Score:" + bestIndividual.fitness);
