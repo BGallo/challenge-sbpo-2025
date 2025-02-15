@@ -22,6 +22,7 @@ public class ChallengeSolver {
     protected int nItems;
     protected int waveSizeLB;
     protected int waveSizeUB;
+    private Map<Integer, Set<Integer>> orderToAislesMap = new HashMap<>();
 
     public ChallengeSolver(
             List<Map<Integer, Integer>> orders, List<Map<Integer, Integer>> aisles, int nItems, int waveSizeLB, int waveSizeUB) {
@@ -42,6 +43,33 @@ public class ChallengeSolver {
         }
 
     }
+    public void reduceAisles(Individual individual) {
+        ChallengeSolution solution = decodeIndividual(individual);
+        Set<Integer> selectedAisles = new HashSet<>(solution.aisles());
+        Set<Integer> selectedOrders = new HashSet<>(solution.orders());
+
+        List<Integer> aislesList = new ArrayList<>(selectedAisles);
+        Collections.shuffle(aislesList); // Randomiza a ordem de remoção
+
+        for (int aisle : aislesList) {
+            Set<Integer> tempAisles = new HashSet<>(selectedAisles);
+            tempAisles.remove(aisle);
+            ChallengeSolution newSolution = new ChallengeSolution(selectedOrders, tempAisles);
+
+            if (isSolutionFeasible(newSolution, false)) {
+                selectedAisles.remove(aisle);
+            }
+        }
+
+        // Atualiza o genoma do indivíduo
+        for (int i = 0; i < aisles.size(); i++) {
+            individual.genome.set(orders.size() + i, selectedAisles.contains(i));
+        }
+
+        // Atualiza o fitness do indivíduo
+        individual.fitness = computeObjectiveFunction(decodeIndividual(individual));
+    }
+
     public Individual geneticAlgorithm(int populationSize,int maxIterations) {
         //Generates the initial population
         ArrayList<Individual> population = this.generateInitialPopulation(populationSize);
@@ -189,7 +217,67 @@ public class ChallengeSolver {
         return new ChallengeSolution(selectedOrders, selectedAisles);
     }
 
-    //One point crossover
+    public void reduceAislesOptimized(Individual individual) {
+        ChallengeSolution solution = decodeIndividual(individual);
+        Set<Integer> selectedAisles = new HashSet<>(solution.aisles());
+        Set<Integer> selectedOrders = new HashSet<>(solution.orders());
+
+        List<Integer> ordersList = new ArrayList<>(selectedOrders);
+        Collections.shuffle(ordersList); // Randomiza a seleção dos pedidos a serem removidos
+
+        int ordersToRemove = ordersList.size() / 2; // Remove aproximadamente metade dos pedidos
+        Set<Integer> removedOrders = new HashSet<>(ordersList.subList(0, ordersToRemove));
+
+        // Remove os pedidos selecionados
+        selectedOrders.removeAll(removedOrders);
+
+        // Identifica corredores associados aos pedidos removidos e os elimina
+        Set<Integer> aislesToRemove = new HashSet<>();
+        for (int aisle : selectedAisles) {
+            if (!isAisleNeeded(aisle, selectedOrders)) {
+                aislesToRemove.add(aisle);
+            }
+        }
+        selectedAisles.removeAll(aislesToRemove);
+
+        // Atualiza o genoma do indivíduo
+        for (int i = 0; i < individual.genome.size(); i++) {
+            if (i < ordersList.size()) {
+                individual.genome.set(i, selectedOrders.contains(i));
+            } else {
+                individual.genome.set(i, selectedAisles.contains(i - ordersList.size()));
+            }
+        }
+
+        // Atualiza o fitness do indivíduo
+        individual.fitness = computeObjectiveFunction(decodeIndividual(individual));
+    }
+
+    private boolean isAisleNeeded(int aisle, Set<Integer> orders) {
+        // Implementação para verificar se o corredor ainda é necessário
+        for (int order : orders) {
+            if (orderRequiresAisle(order, aisle)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean orderRequiresAisle(int order, int aisle) {
+        // Verifica se o pedido requer um corredor específico
+        return getAislesForOrder(order).contains(aisle);
+    }
+
+    private Set<Integer> getAislesForOrder(int order) {
+        // Retorna os corredores associados a um pedido
+        return orderToAislesMap.getOrDefault(order, Collections.emptySet());
+    }
+
+    public void initializeOrderToAislesMap(Map<Integer, Set<Integer>> mapping) {
+        this.orderToAislesMap = new HashMap<>(mapping);
+    }
+
+
     public Individual crossover(Individual parent1, Individual parent2) {
         Random rand = new Random();
         ArrayList<Boolean> childGenome = new ArrayList<>(Collections.nCopies(orders.size() + aisles.size(), false));
@@ -241,24 +329,30 @@ public class ChallengeSolver {
         }
         ChallengeSolution atual = new ChallengeSolution(selectedOrders, selectedAisles);
         Individual child = new Individual(childGenome, computeObjectiveFunction(atual));
-        mutate(child);
+        mutate(child,1);
         return child;
     }
 
 
-    public void mutate(Individual individual) {
+    public void mutate(Individual individual,int type) {
         Random rand = new Random();
         if (rand.nextDouble() > 0.1) return;
-        int numMutations = Math.max(1, individual.genome.size() / 10);
-        Set<Integer> mutationPoints = new HashSet<>();
+        if(type == 0) {
+            int numMutations = Math.max(1, individual.genome.size() / 10);
+            Set<Integer> mutationPoints = new HashSet<>();
 
-        while (mutationPoints.size() < numMutations) {
-            mutationPoints.add(rand.nextInt(individual.genome.size()));
+            while (mutationPoints.size() < numMutations) {
+                mutationPoints.add(rand.nextInt(individual.genome.size()));
+            }
+
+            for (int mutationPoint : mutationPoints) {
+                individual.genome.set(mutationPoint, !individual.genome.get(mutationPoint));
+            }
+        }
+        else if (type == 1) {
+            reduceAisles(individual);
         }
 
-        for (int mutationPoint : mutationPoints) {
-            individual.genome.set(mutationPoint, !individual.genome.get(mutationPoint));
-        }
     }
 
     /*
