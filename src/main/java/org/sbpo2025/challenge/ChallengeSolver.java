@@ -12,11 +12,11 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
-
+import java.util.concurrent.*;
 
 public class ChallengeSolver {
     private final long MAX_RUNTIME = 3000; // milliseconds; 30 s
-
+    private final int NUM_THREADS = Runtime.getRuntime().availableProcessors();
     protected List<Map<Integer, Integer>> orders;
     protected List<Map<Integer, Integer>> aisles;
     protected int nItems;
@@ -45,11 +45,7 @@ public class ChallengeSolver {
 
         }
     }
-
-    public ChallengeSolution solve(StopWatch stopWatch) {
-        final int populationSize = 50;
-        final int maxIterations = Integer.MAX_VALUE;
-
+    public Individual geneticAlgorithm(int populationSize,int maxIterations) {
         //Generates the initial population
         ArrayList<Individual> population = this.generateInitialPopulation(populationSize);
 
@@ -72,7 +68,9 @@ public class ChallengeSolver {
 
         int currentIteration = 0;
         //Main loop
-        while (stopWatch.getTime() < MAX_RUNTIME && currentIteration < maxIterations) {
+        StopWatch cronometro= new StopWatch();
+        cronometro.start();
+        while (cronometro.getDuration().getSeconds()<30 && currentIteration < maxIterations) {
             currentIteration++;
 
             //Crossover
@@ -95,8 +93,36 @@ public class ChallengeSolver {
                 System.out.println("New solution: " + bestSolution);
                 System.out.println("is feasible? " + isSolutionFeasible(bestSolution, true));
             }
+
         }
-        return bestSolution;
+        return population.get(0);
+    }
+
+    public ChallengeSolution solve(StopWatch stopWatch) {
+        final int populationSize = 50;
+        final int maxIterations = Integer.MAX_VALUE;
+        ExecutorService executor = Executors.newFixedThreadPool(NUM_THREADS);
+        List<Future<Individual>> futures = new ArrayList<>();
+        System.out.println("Iniciando busca com " + NUM_THREADS + " threads.");
+        for (int i = 0; i < NUM_THREADS; i++) {
+            final int threadId = i; // Capturar ID da thread
+            futures.add(executor.submit(() -> geneticAlgorithm(populationSize, maxIterations)));
+        }
+        Individual bestIndividual = null;
+        try {
+            for (Future<Individual> future : futures) {
+                Individual candidate = future.get();
+                if (bestIndividual == null || (candidate != null && candidate.fitness > bestIndividual.fitness)) {
+                    bestIndividual = candidate;
+                }
+            }
+        } catch (InterruptedException | ExecutionException e) {
+            System.err.println("Erro na busca: " + e.getMessage());
+            e.printStackTrace();
+        };
+        System.out.println("Melhor individuo: " + decodeIndividual(bestIndividual) +" Score:" + bestIndividual.fitness);
+        return this.decodeIndividual(bestIndividual);
+
     }
 
     public ArrayList<Individual> generateInitialPopulation(int size) {
