@@ -15,7 +15,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.*;
 
 public class ChallengeSolver {
-    private final long MAX_RUNTIME = 30000; // milliseconds; 30 s
+    private final long MAX_RUNTIME = 5000; // milliseconds; 5 s
     private final int NUM_THREADS = Runtime.getRuntime().availableProcessors();
     protected List<Map<Integer, Integer>> orders;
     protected List<Map<Integer, Integer>> aisles;
@@ -95,7 +95,7 @@ public class ChallengeSolver {
         //Main loop
         StopWatch cronometro= new StopWatch();
         cronometro.start();
-        while (cronometro.getDuration().getSeconds()<30 && currentIteration < maxIterations) {
+        while (cronometro.getDuration().getSeconds()<5 && currentIteration < maxIterations) {
             currentIteration++;
 
             //Crossover
@@ -125,14 +125,22 @@ public class ChallengeSolver {
     public ChallengeSolution solve(StopWatch stopWatch) {
         final int populationSize = 100;
         final int maxIterations = Integer.MAX_VALUE;
-        Individual bestIndividual = geneticAlgorithm(populationSize, maxIterations);
+        Individual GaIndividual = geneticAlgorithm(populationSize, maxIterations);
+        long fimGa = stopWatch.getDuration().getSeconds();
+        ChallengeSolution graspSolution = solveGRASP(0.7);
+        double graspFitness = 0.0;
 
-        if(bestIndividual != null) {
-
-            System.out.println("Melhor individuo: " + decodeIndividual(bestIndividual) +" Score:" + bestIndividual.fitness);
+        if(GaIndividual != null) {
+            System.out.println(" Score GA:" + GaIndividual.fitness);
         }
-        System.out.println("Levou:"+stopWatch.getDuration().getSeconds());
-        return this.decodeIndividual(bestIndividual);
+        System.out.println("Levou:"+fimGa);
+        if(graspSolution != null) {
+            graspFitness = computeObjectiveFunction(graspSolution);
+            System.out.println(" Score GRASP:" + graspFitness);
+            System.out.println("É viável: " + isSolutionFeasible(graspSolution, true));
+        }
+        System.out.println("Levou:"+(stopWatch.getDuration().getSeconds()-fimGa));
+        return GaIndividual.fitness >graspFitness?this.decodeIndividual(GaIndividual):graspSolution;
 
     }
 
@@ -451,11 +459,286 @@ public class ChallengeSolver {
 
         return individual;
     }
+
+    public ChallengeSolution solveGRASP(double alpha) {
+        long startTime = System.currentTimeMillis();
+        ChallengeSolution bestSolution = null;
+        double bestQuality = 0.0;
+
+        while (System.currentTimeMillis() - startTime < MAX_RUNTIME) {
+            ChallengeSolution solution = constructGreedyRandomizedSolution(alpha);
+            solution = localSearch(solution);
+            double quality = computeObjectiveFunction(solution);
+            if (quality >= bestQuality) {
+                bestQuality = quality;
+                bestSolution = solution;
+            }
+        }
+        return bestSolution;
+    }
     
     
-    
+    private ChallengeSolution constructGreedyRandomizedSolution(double alpha) {
+        Set<Integer> selectedOrders = new HashSet<>();
+        Set<Integer> selectedAisles = new HashSet<>();
+        List<Integer> candidateOrders = new ArrayList<>();
+        Map<Integer, Integer> orderItemCount = new HashMap<>();
+        Map<Integer, Integer> usedItemsInAisles = new HashMap<>();
+
+        for (int i = 0; i < orders.size(); i++) {
+            int totalItems = orders.get(i).values().stream().mapToInt(Integer::intValue).sum();
+            orderItemCount.put(i, totalItems);
+            candidateOrders.add(i);
+        }
+
+        int totalSelectedItems = 0;
+
+        while (!candidateOrders.isEmpty()) {
+            List<Integer> RCL = buildRCL(candidateOrders, orderItemCount, alpha);
+            if (RCL.isEmpty()) break;
+
+            int selectedOrder = RCL.get(new Random().nextInt(RCL.size()));
+            int orderItems = orderItemCount.get(selectedOrder);
+
+            if (totalSelectedItems + orderItems > waveSizeUB) {
+                candidateOrders.remove(Integer.valueOf(selectedOrder));
+                continue;
+            }
+
+            Set<Integer> orderAisles = selectAislesForOrder(selectedOrder, selectedAisles, usedItemsInAisles);
+            
+            if (orderAisles.isEmpty()) {
+                orderAisles = selectAislesForOrder(selectedOrder, new HashSet<>(selectedAisles), usedItemsInAisles);
+                if (orderAisles.isEmpty()) {
+                    candidateOrders.remove(Integer.valueOf(selectedOrder));
+                    continue;
+                }
+            }
+
+            updateUsedItemsInAisles(selectedOrder, orderAisles, usedItemsInAisles);
+
+            selectedOrders.add(selectedOrder);
+            selectedAisles.addAll(orderAisles);
+            totalSelectedItems += orderItems;
+            candidateOrders.remove(Integer.valueOf(selectedOrder));
+        }
+
+        return new ChallengeSolution(selectedOrders, selectedAisles);
+    }
+
+    private List<Integer> buildRCL(List<Integer> candidateOrders, Map<Integer, Integer> orderItemCount, double alpha) {
+        List<Integer> RCL = new ArrayList<>();
+        int maxItems = candidateOrders.stream().mapToInt(orderItemCount::get).max().orElse(0);
+        int minItems = candidateOrders.stream().mapToInt(orderItemCount::get).min().orElse(0);
+        double threshold = maxItems - alpha * (maxItems - minItems);
+
+        for (int order : candidateOrders) {
+            if (orderItemCount.get(order) >= threshold) {
+                RCL.add(order);
+            }
+        }
+        return RCL;
+    }
+
+    private Set<Integer> selectAislesForOrder(int order, Set<Integer> selectedAisles, Map<Integer, Integer> usedItemsInAisles) {
+        Map<Integer, Integer> orderItems = orders.get(order);
+        Set<Integer> possibleAisles = new HashSet<>(selectedAisles);
+
+        if (coversOrder(orderItems, possibleAisles, usedItemsInAisles)) {
+            return possibleAisles;
+        }
+
+        for (int aisle = 0; aisle < aisles.size(); aisle++) {
+            if (!selectedAisles.contains(aisle)) {
+                possibleAisles.add(aisle);
+                if (coversOrder(orderItems, possibleAisles, usedItemsInAisles)) {
+                    return new HashSet<>(possibleAisles);
+                }
+            }
+        }
+
+        return Collections.emptySet();
+    }
+
+    private boolean coversOrder(Map<Integer, Integer> orderItems, Set<Integer> aisleCombination, Map<Integer, Integer> usedItemsInAisles) {
+        Map<Integer, Integer> itemsCovered = new HashMap<>();
+
+        for (int aisle : aisleCombination) {
+            for (var entry : aisles.get(aisle).entrySet()) {
+                int available = entry.getValue() - usedItemsInAisles.getOrDefault(aisle * 1000 + entry.getKey(), 0);
+                if (available > 0) {
+                    itemsCovered.put(entry.getKey(), itemsCovered.getOrDefault(entry.getKey(), 0) + available);
+                }
+            }
+        }
+
+        for (var entry : orderItems.entrySet()) {
+            if (itemsCovered.getOrDefault(entry.getKey(), 0) < entry.getValue()) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private void updateUsedItemsInAisles(int order, Set<Integer> orderAisles, Map<Integer, Integer> usedItemsInAisles) {
+        Map<Integer, Integer> orderItems = orders.get(order);
+
+        for (int aisle : orderAisles) {
+            for (var entry : orderItems.entrySet()) {
+                int itemKey = aisle * 1000 + entry.getKey();
+                usedItemsInAisles.put(itemKey, usedItemsInAisles.getOrDefault(itemKey, 0) + entry.getValue());
+            }
+        }
+    }
+
+    private ChallengeSolution localSearch(ChallengeSolution solution) {
+        boolean improved = true;
+        double quality = 0.0;
+        double bestQuality = computeObjectiveFunction(solution);
+        ChallengeSolution bestSolution = solution;
+        while (improved) {
+            improved = false;
+            solution = tryRemoveAisle(solution);
+            quality = solution != null?computeObjectiveFunction(solution):0.0;
+            if (bestQuality < quality) {
+                improved = true;
+                bestQuality = quality;
+                bestSolution = solution;
+            }
+            //função está retornando null em algum momento por algum motivo
+            solution = tryAddOrderWithoutNewAisles(solution);
+            quality = solution != null?computeObjectiveFunction(solution):0.0;
+            if (bestQuality < quality) {
+                improved = true;
+                bestQuality = quality;
+                bestSolution = solution;
+            }
+        }
+        return bestSolution;
+    }
+
+    private ChallengeSolution tryRemoveAisle(ChallengeSolution solution) {
+        Set<Integer> selectedOrders = solution.orders();
+        Set<Integer> selectedAisles = solution.aisles();
+
+        Map<Integer, Integer> usedItems = new HashMap<>();
+        Map<Integer, Integer> availableItems = new HashMap<>();
     
 
+        for (int i = 0; i < nItems; i++) {
+            usedItems.put(i, 0);
+            availableItems.put(i, 0);
+        }
+
+        for (int order : selectedOrders) {
+            for (var entry : orders.get(order).entrySet()) {
+                usedItems.put(entry.getKey(), usedItems.get(entry.getKey()) + entry.getValue());
+            }
+        }
+
+        for (int aisle : selectedAisles) {
+            for (var entry : aisles.get(aisle).entrySet()) {
+                availableItems.put(entry.getKey(), availableItems.get(entry.getKey()) + entry.getValue());
+            }
+        }
+
+        for (int item : usedItems.keySet()) {
+            availableItems.put(item, availableItems.get(item) - usedItems.get(item));
+        }
+    
+        Set<Integer> aislesToRemove = new HashSet<>();
+        for (int aisle : selectedAisles) {
+            boolean canRemove = true;
+
+            for (var entry : aisles.get(aisle).entrySet()) {
+                int aisleItem = entry.getKey();
+                int aisleItemQuantity = entry.getValue();
+    
+                if (availableItems.get(aisleItem) < aisleItemQuantity) {
+                    canRemove = false;
+                    break;
+                }
+            }
+    
+            if (canRemove) {
+                for (var entry : aisles.get(aisle).entrySet()) {
+                    availableItems.put(entry.getKey(), availableItems.get(entry.getKey()) - entry.getValue());
+                }
+                aislesToRemove.add(aisle);
+            }
+        }
+    
+        if (!aislesToRemove.isEmpty()) {
+            Set<Integer> newSelectedAisles = new HashSet<>(selectedAisles);
+    
+            newSelectedAisles.removeAll(aislesToRemove);
+    
+            ChallengeSolution newSolution = new ChallengeSolution(selectedOrders, newSelectedAisles);
+            return newSolution;
+        }
+        return solution;
+    }
+
+    private ChallengeSolution tryAddOrderWithoutNewAisles(ChallengeSolution solution) {
+       Set<Integer> selectedOrders = solution.orders();
+        Set<Integer> selectedAisles = solution.aisles();
+        int totalItems = 0;
+
+        Map<Integer, Integer> usedItems = new HashMap<>();
+        Map<Integer, Integer> availableItems = new HashMap<>();
+    
+        for (int i = 0; i < nItems; i++) {
+            usedItems.put(i, 0);
+            availableItems.put(i, 0);
+        }
+    
+        for (int order : selectedOrders) {
+            for (var entry : orders.get(order).entrySet()) {
+                usedItems.put(entry.getKey(), usedItems.get(entry.getKey()) + entry.getValue());
+                totalItems+=entry.getValue();
+            }
+        }
+    
+        for (int aisle : selectedAisles) {
+            for (var entry : aisles.get(aisle).entrySet()) {
+                availableItems.put(entry.getKey(), availableItems.get(entry.getKey()) + entry.getValue());
+            }
+        }
+    
+        for (int item : usedItems.keySet()) {
+            availableItems.put(item, availableItems.get(item) - usedItems.get(item));
+        }
+    
+        for (int i = 0; i < orders.size(); i++) {
+            if (!selectedOrders.contains(i)) {
+                Map<Integer, Integer> order = orders.get(i);
+                boolean canBeAdded = true;
+                int orderTotalItems = 0;
+                Map<Integer, Integer> tempAvailableItems = new HashMap<>(availableItems);
+    
+                for (var entry : order.entrySet()) {
+                    if (tempAvailableItems.get(entry.getKey()) < entry.getValue()) {
+                        canBeAdded = false;
+                        break;
+                    }
+                    tempAvailableItems.put(entry.getKey(), tempAvailableItems.get(entry.getKey()) - entry.getValue());
+                    orderTotalItems += entry.getValue();
+                }
+    
+                if (canBeAdded && (totalItems + orderTotalItems) <= waveSizeUB) {
+                    selectedOrders.add(i);
+                    totalItems += orderTotalItems;
+                    availableItems = tempAvailableItems;
+                }
+            }
+        }
+
+        ChallengeSolution betterSolution = new ChallengeSolution(selectedOrders, selectedAisles);
+        solution = (betterSolution != null)?betterSolution:solution;
+    
+        return solution;
+    }
     /*
      * Get the remaining time in seconds
      */
