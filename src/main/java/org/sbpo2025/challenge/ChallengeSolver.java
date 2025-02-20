@@ -69,14 +69,20 @@ public class ChallengeSolver {
         System.out.println("is feaseble?" + isSolutionFeasible(bestSolution, true));
 
         int currentIteration = 0;
+        int iterationsSinceLastImprovement = 0;
+        int genomeSize = orders.size() + aisles.size();
         // Main loop
         while (stopWatch.getTime() < MAX_RUNTIME && currentIteration < maxIterations) {
             currentIteration++;
 
+            int factor = Math.max(Math.min((int) ((Math.sqrt(iterationsSinceLastImprovement / 5000.0)) * genomeSize), genomeSize / 4), 1);
+
             // One point smart crossover
-            population = crossOverPopulation(population);
+            population = crossOverPopulation(population, factor);
 
             population.sort((a, b) -> Double.compare(b.fitness, a.fitness));
+
+            System.out.println("Iteration: " + currentIteration + " AVG: " + population.stream().mapToDouble(i -> i.fitness).average().getAsDouble());
 
             // Selects the next generation
             chooseNextGeneration(population, populationSize, PopulationSelectionType.BEST_THEN_RANDOM);
@@ -85,7 +91,10 @@ public class ChallengeSolver {
                 bestScore = population.get(0).fitness;
                 bestSolution = this.decodeGenome(population.get(0).genome);
                 System.out.println("New best solution found: " + bestScore + " in iteration: " + currentIteration);
+                iterationsSinceLastImprovement = 0;
             }
+
+            iterationsSinceLastImprovement++;
         }
 
         System.out.println("Final best score: " + bestScore);
@@ -237,75 +246,125 @@ public class ChallengeSolver {
     }
 
     // two point proportional crossover
-    public Individual crossover(Individual parent1, Individual parent2) {
+    public Individual crossover(Individual parent1, Individual parent2, int factor) {
         Random rand = new Random();
         BitSet childGenome = new BitSet(this.orders.size() + this.aisles.size());
 
-        int orderCrossoverPoint = rand.nextInt(this.orders.size());
-        int aisleCrossoverPoint = (orderCrossoverPoint * this.aisles.size()) / this.orders.size();
+        int crossoverPoint = rand.nextInt(this.orders.size());
+        ArrayList<Integer> choosenOrders = new ArrayList<>();
 
-        for (int i = 0; i < parent1.genome.size(); i++) {
-            Individual parent;
-            if (i < this.orders.size()) {
-                parent = i < orderCrossoverPoint ? parent1 : parent2;
-            } else {
-                parent = i < orders.size() + aisleCrossoverPoint ? parent1 : parent2;
-            }
-
+        for (int i = 0; i < this.orders.size(); i++) {
+            Individual parent = i < crossoverPoint ? parent1 : parent2;
+            
             boolean parentGene = parent.genome.get(i);
             childGenome.set(i, parentGene);
-
+            if(parentGene) choosenOrders.add(i);
         }
 
-        Individual child = new Individual(childGenome, -1);
-        calcOfferAndDemand(child);
+        //build demand
+        HashMap<Integer, Integer> pickedItems = new HashMap<>();
+        for (int i = 0; i < this.orders.size(); i++) {
+            if (childGenome.get(i)) {
+                for (Map.Entry<Integer, Integer> entry : this.orders.get(i).entrySet()) {
+                    int item = entry.getKey();
+                    int quantity = entry.getValue();
+                    pickedItems.put(item, pickedItems.getOrDefault(item, 0) + quantity);
+                }
+            }
+        }
 
-        int roundsOfMutation = Math.max(2, child.genome.size() / 10);
-        roundsOfMutation = Math.min(roundsOfMutation, 10);
-        for (int i = 0; i < roundsOfMutation; i++)
-            mutate(child);
+        //build matching aisles for offer
+        ArrayList<Integer> aislesIndexes = IntStream.range(0, this.aisles.size()).boxed().collect(Collectors.toCollection(ArrayList::new));
+        Collections.shuffle(aislesIndexes);
+
+        ArrayList<Integer> choosenAisles = new ArrayList<>();
+        
+        boolean added = true;
+        for (Map.Entry<Integer, Integer> entry : pickedItems.entrySet()) {
+            int item = entry.getKey();
+            int quantity = entry.getValue();
+            int _i = 0;
+            while (quantity > 0 && _i < aislesIndexes.size()) {
+                Integer aislesIndex = aislesIndexes.get(_i);
+                Map<Integer, Integer> aisle = this.aisles.get(aislesIndex);
+
+                if (aisle.containsKey(item)) {
+                    int quantityInAisle = aisle.get(item);
+                    int quantityToTake = Math.min(quantity, quantityInAisle);
+                    quantity -= quantityToTake;
+                    choosenAisles.add(aislesIndex);
+                }
+                
+                _i++;
+            }
+
+            if(quantity > 0) {
+                added = false;
+                break;
+            }  
+        }
+
+        Individual child;
+        if(added) {
+            for (int i = 0; i < this.aisles.size(); i++) {
+                if (choosenAisles.contains(i)) {
+                    childGenome.set(this.orders.size() + i, true);
+                }
+            }
+
+            child = new Individual(childGenome, -1);
+        } else {
+            child = new Individual(parent1.genome, -1);
+        }
+
+        calcOfferAndDemand(child);
+        mutate(child, factor);
 
         return child;
     }
 
-    public void mutate(Individual individual) {
+    public void mutate(Individual individual, int factor) {
         Random rand = new Random();
         if (rand.nextFloat() < 0.25) {
             // Mess with orders
             if (rand.nextBoolean()) {
                 // Remove a random order
                 if (rand.nextFloat() < 0.25) {
+                    while (factor > 0) {
+                        int firstSetBit = individual.genome.nextSetBit(0);
+                        boolean anyMatch = (firstSetBit != -1 && firstSetBit < orders.size());
 
-                    int firstSetBit = individual.genome.nextSetBit(0);
-                    boolean anyMatch = (firstSetBit != -1 && firstSetBit < orders.size());
+                        if (anyMatch) {
+                            int orderIndex = rand.nextInt(orders.size());
 
-                    if (anyMatch) {
-                        int orderIndex = rand.nextInt(orders.size());
+                            while (!individual.genome.get(orderIndex)) {
+                                orderIndex = rand.nextInt(orders.size());
+                            }
 
-                        while (!individual.genome.get(orderIndex)) {
-                            orderIndex = rand.nextInt(orders.size());
+                            Map<Integer, Integer> order = orders.get(orderIndex);
+
+                            int totalItems = 0;
+
+                            for (Map.Entry<Integer, Integer> entry : order.entrySet()) {
+                                int item = entry.getKey();
+                                int quantity = entry.getValue();
+                                totalItems += quantity;
+                                individual.pickedItems.put(item, individual.pickedItems.get(item) - quantity);
+                            }
+
+                            individual.totalPickedItems -= totalItems;
+                            individual.genome.set(orderIndex, false);
                         }
-
-                        Map<Integer, Integer> order = orders.get(orderIndex);
-
-                        int totalItems = 0;
-
-                        for (Map.Entry<Integer, Integer> entry : order.entrySet()) {
-                            int item = entry.getKey();
-                            int quantity = entry.getValue();
-                            totalItems += quantity;
-                            individual.pickedItems.put(item, individual.pickedItems.get(item) - quantity);
-                        }
-
-                        individual.totalPickedItems -= totalItems;
-                        individual.genome.set(orderIndex, false);
+                        factor--;
                     }
                     // Try to add an order without breaking the rules
                 } else {
                     List<Integer> orderIndexes = IntStream.range(0, orders.size()).boxed().collect(Collectors.toList());
 
-                    while (!orderIndexes.isEmpty()) {
-                        int orderIndex = orderIndexes.remove(rand.nextInt(orderIndexes.size()));
+                    Collections.shuffle(orderIndexes);
+
+                    while (!orderIndexes.isEmpty() && factor > 0) {
+                        int orderIndex = orderIndexes.remove(0);
                         Map<Integer, Integer> order = orders.get(orderIndex);
 
                         int orderSum = order.values().stream().mapToInt(Integer::intValue).sum();
@@ -335,8 +394,8 @@ public class ChallengeSolver {
 
                             individual.genome.set(orderIndex, true);
                             individual.totalPickedItems += orderSum;
-                            break;
                         }
+                        factor--;
                     }
                 }
                 // Mess with aisles
@@ -344,35 +403,41 @@ public class ChallengeSolver {
                 // Add a random aisle
                 if (rand.nextFloat() < 0.25) {
 
-                    int start = orders.size();
-                    int end = orders.size() + aisles.size();
-                    boolean anyFalse = individual.genome.nextClearBit(start) < end;
+                    while (factor > 0) {
+                        int start = orders.size();
+                        int end = orders.size() + aisles.size();
+                        boolean anyFalse = individual.genome.nextClearBit(start) < end;
 
-                    if (anyFalse) {
+                        if (anyFalse) {
 
-                        int aislesIndex = rand.nextInt(aisles.size());
+                            int aislesIndex = rand.nextInt(aisles.size());
 
-                        while (individual.genome.get(aislesIndex + orders.size())) {
-                            aislesIndex = rand.nextInt(aisles.size());
+                            while (individual.genome.get(aislesIndex + orders.size())) {
+                                aislesIndex = rand.nextInt(aisles.size());
+                            }
+
+                            Map<Integer, Integer> aisle = aisles.get(aislesIndex);
+
+                            for (Map.Entry<Integer, Integer> entry : aisle.entrySet()) {
+                                int item = entry.getKey();
+                                int quantity = entry.getValue();
+                                individual.offeredItems.put(item,
+                                        individual.offeredItems.getOrDefault(item, 0) + quantity);
+                            }
+
+                            individual.genome.set(aislesIndex + orders.size(), true);
                         }
-
-                        Map<Integer, Integer> aisle = aisles.get(aislesIndex);
-
-                        for (Map.Entry<Integer, Integer> entry : aisle.entrySet()) {
-                            int item = entry.getKey();
-                            int quantity = entry.getValue();
-                            individual.offeredItems.put(item, individual.offeredItems.getOrDefault(item, 0) + quantity);
-                        }
-
-                        individual.genome.set(aislesIndex + orders.size(), true);
+                        factor--;
                     }
                     // Try to remove an aisle without breaking the rules
                 } else {
                     List<Integer> aisleIndexes = IntStream.range(0, aisles.size())
                             .filter(i -> individual.genome.get(i + orders.size())).boxed().collect(Collectors.toList());
 
-                    while (!aisleIndexes.isEmpty()) {
-                        int aisleIndex = aisleIndexes.remove(rand.nextInt(aisleIndexes.size()));
+                    Collections.shuffle(aisleIndexes);
+
+                    while (!aisleIndexes.isEmpty() && factor > 0) {
+                        int aisleIndex = aisleIndexes.remove(0);
                         Map<Integer, Integer> aisle = aisles.get(aisleIndex);
 
                         boolean canRemoveAisle = true;
@@ -394,8 +459,8 @@ public class ChallengeSolver {
                             }
 
                             individual.genome.set(aisleIndex + orders.size(), false);
-                            break;
                         }
+                        factor--;
                     }
 
                 }
@@ -409,29 +474,16 @@ public class ChallengeSolver {
      * Recieves an already sorted population
      * Returns a population of size n * 1.5
      */
-    public ArrayList<Individual> crossOverPopulation(ArrayList<Individual> population) {
-        ArrayList<Individual> newPopulation = new ArrayList<>();
-        Random rand = new Random();
+    public ArrayList<Individual> crossOverPopulation(ArrayList<Individual> population, int factor) {
+        Collections.shuffle(population);
+        final int halfPopulationSize = population.size() / 2;
 
-        while (!population.isEmpty()) {
-            Individual parent1 = population.remove(0);
-            Individual parent2;
-            newPopulation.add(parent1);
+        return IntStream.range(0, halfPopulationSize).parallel().mapToObj(i -> {
+            Individual parent1 = population.get(i);
+            Individual parent2 = population.get(i + halfPopulationSize);
 
-            // biased for loop
-            if (population.isEmpty())
-                break;
-            for (int i = 0; i < population.size(); i++) {
-                if (rand.nextDouble() < 0.5 || i == population.size() - 1) {
-                    parent2 = population.remove(i);
-                    newPopulation.add(parent2);
-                    newPopulation.add(crossover(parent1, parent2));
-                    break;
-                }
-            }
-        }
-
-        return newPopulation;
+            return Arrays.asList(crossover(parent1, parent2, factor), crossover(parent2, parent1, factor));
+        }).flatMap(List::stream).collect(Collectors.toCollection(ArrayList::new));
     }
 
     /*
