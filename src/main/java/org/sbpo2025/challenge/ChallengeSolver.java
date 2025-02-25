@@ -1,20 +1,24 @@
 package org.sbpo2025.challenge;
 
-import org.apache.commons.lang3.time.StopWatch;
-
-import java.lang.reflect.Array;
+import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+
+import org.apache.commons.lang3.time.StopWatch;
 
 public class ChallengeSolver {
     private final long MAX_RUNTIME = 30000; // milliseconds; 30 s
@@ -31,17 +35,6 @@ public class ChallengeSolver {
         this.nItems = nItems;
         this.waveSizeLB = waveSizeLB;
         this.waveSizeUB = waveSizeUB;
-    }
-
-    public static class Individual {
-        protected ArrayList<Boolean> genome;
-        protected double fitness;
-
-        public Individual(ArrayList<Boolean> genome, double fitness) {
-            this.genome = genome;
-            this.fitness = fitness;
-        }
-
     }
 
     public static class RVNDSolution {
@@ -71,14 +64,14 @@ public class ChallengeSolver {
     }
 
     public ChallengeSolution solve(StopWatch stopWatch) {
-        double alpha = 0.80;
+        double alpha = 0.50;
 
         long startTime = System.currentTimeMillis();
 
         RVNDSolution bestSolution = constructGreedyRandomizedSolution(alpha);
-        double bestQuality = computeObjectiveFunction(bestSolution);
+        double bestQuality = computeObjectiveFunction(decodeRVNDSolution(bestSolution));
 
-        System.out.println("Initial Solution: " + bestSolution + " with quality: " + bestQuality);
+        System.out.println("Initial Solution with quality: " + bestQuality);
         System.out.println("is Feaseble: " + isSolutionFeasible(bestSolution, true));
 
         int currentIteration = 0;
@@ -86,16 +79,18 @@ public class ChallengeSolver {
         while (System.currentTimeMillis() - startTime < MAX_RUNTIME && currentIteration < maxIterations) {
             currentIteration++;
 
+            /* System.out.println("Iteration " + currentIteration); */
+
             RVNDSolution currentSolution = constructGreedyRandomizedSolution(alpha);
             double currentQuality = bestQuality;
 
             currentSolution = randomVariableNeighborhoodDescent(currentSolution, currentQuality);
-            currentQuality = computeObjectiveFunction(currentSolution);
+            currentQuality = computeObjectiveFunction(decodeRVNDSolution(currentSolution));
 
             if (currentQuality > bestQuality) {
                 bestQuality = currentQuality;
                 bestSolution = currentSolution;
-                System.out.println("New best solution found in Iteration " + currentIteration + ": " + bestQuality);
+                /* System.out.println("New best solution found in Iteration " + currentIteration + ": " + bestQuality); */
             }
         }
 
@@ -103,16 +98,14 @@ public class ChallengeSolver {
         double graspFitness = 0.0;
 
         if(bestSolution != null) {
-            graspFitness = computeObjectiveFunction(bestSolution);
+            graspFitness = computeObjectiveFunction(decodeRVNDSolution(bestSolution));
             System.out.println("Best Score GRASP:" + graspFitness);
             System.out.println("É viável: " + isSolutionFeasible(bestSolution, true));
-            System.out.println("Solution: " + bestSolution);
+            /* System.out.println("Solution: " + bestSolution); */
         }
 
         return new ChallengeSolution(new HashSet<>(bestSolution.orders()), new HashSet<>(bestSolution.aisles()));
     }
-
-    
     
     private RVNDSolution constructGreedyRandomizedSolution(double alpha) {
         Random rand = new Random();
@@ -173,42 +166,36 @@ public class ChallengeSolver {
     }
 
     private HashMap<Integer, Integer> getItemsLeftInAisles(Set<Integer> selectedOrders, Set<Integer> selectedAisles) {
-        HashMap<Integer, Integer> itemsLeftInAisles = new HashMap<>();
+        ConcurrentMap<Integer, Integer> itemsLeftInAisles = new ConcurrentHashMap<>();
 
         //Adds all aisles items to the itemsLeftInAisles
-        for (int aisle : selectedAisles) {
-            for (Map.Entry<Integer, Integer> entry : aisles.get(aisle).entrySet()) {
-                int item = entry.getKey();
-                int quantity = entry.getValue();
-                itemsLeftInAisles.put(item, itemsLeftInAisles.getOrDefault(item, 0) + quantity);
-            }
-        }
+        selectedAisles.parallelStream().forEach(aisle -> {
+            aisles.get(aisle).forEach((item, quantity) -> {
+                itemsLeftInAisles.merge(item, quantity, Integer::sum);
+            });
+        });
 
         //Subtracts the items that were selected in the orders
-        for (int order : selectedOrders) {
-            for (Map.Entry<Integer, Integer> entry : orders.get(order).entrySet()) {
-                int item = entry.getKey();
-                int quantity = entry.getValue();
-                itemsLeftInAisles.put(item, itemsLeftInAisles.getOrDefault(item, 0) - quantity);
-            }
-        }
+        selectedOrders.parallelStream().forEach(order -> {
+            orders.get(order).forEach((item, quantity) -> {
+                itemsLeftInAisles.merge(item, -quantity, Integer::sum);
+            });
+        });
 
         /* System.out.println("Items left in the aisles: " + itemsLeftInAisles); */
 
-        return itemsLeftInAisles;
+        return new HashMap<>(itemsLeftInAisles);
     }
 
     private List<Integer> buildRCL(List<Integer> candidateOrders, Map<Integer, Integer> orderItemCount, double alpha) {
-        List<Integer> RCL = new ArrayList<>();
-        int maxItems = candidateOrders.stream().mapToInt(orderItemCount::get).max().orElse(0);
-        int minItems = candidateOrders.stream().mapToInt(orderItemCount::get).min().orElse(0);
+        int maxItems = candidateOrders.parallelStream().mapToInt(orderItemCount::get).max().orElse(0);
+        int minItems = candidateOrders.parallelStream().mapToInt(orderItemCount::get).min().orElse(0);
         double threshold = maxItems - alpha * (maxItems - minItems);
 
-        for (int order : candidateOrders) {
-            if (orderItemCount.get(order) >= threshold) {
-                RCL.add(order);
-            }
-        }
+        List<Integer> RCL = candidateOrders.parallelStream()
+            .filter(order -> orderItemCount.get(order) >= threshold)
+            .collect(Collectors.toList());
+
         return RCL;
     }
 
@@ -272,80 +259,50 @@ public class ChallengeSolver {
     }
 
     class Neighborhood {
-        int iterator;
+        protected final int MAX_ITERATIONS = 50;
 
         RVNDSolution explore(RVNDSolution initialSolution, double initialQuality) {
             return null;
         }
 
-        boolean move(RVNDSolution solution) { return false; }
-
-        boolean hasNext(RVNDSolution solution) {
-            return true;
-        }
-
-        void start() {
-            iterator = 0;
-            /* System.out.println("Starting Neighborhood"); */
-        }
-
-        void next() {
-            iterator++;
-        }
-
+        boolean move(RVNDSolution solution, int iterator) { return false; }
     }
 
     class RemoveAisle extends Neighborhood{
 
         @Override
-        boolean hasNext(RVNDSolution solution) {
-            /* System.out.println("Checking if iteration is over: " + iterator + " < " + solution.aisles().size()); */
-            return iterator < solution.aisles().size() && iterator < 100;
-        }
-
-        @Override
         RVNDSolution explore(RVNDSolution initialSolution, double initialQuality) {
-            /* System.out.println("Exploring Remove Aisle Neighborhood"); */
-
             RVNDSolution bestSolution = initialSolution;
-            double bestQuality = initialQuality;
 
-            /* System.out.println("Initial Solution: " + bestSolution + " with quality: " + bestQuality); */
+            List<Integer> shuffledAisles = new ArrayList<>(initialSolution.aisles());
+            Collections.shuffle(shuffledAisles);
 
-            Collections.shuffle(initialSolution.aisles());
+            bestSolution = shuffledAisles.parallelStream().limit(this.MAX_ITERATIONS).map((aisleIndex) ->{
+                RVNDSolution currentSolution = new RVNDSolution(
+                    new ArrayList<>(initialSolution.orders()), 
+                    new ArrayList<>(initialSolution.aisles())
+                );
 
-            this.start();
-            while (this.hasNext(initialSolution)) {
-                RVNDSolution currentSolution = new RVNDSolution(new ArrayList<>(initialSolution.orders()), new ArrayList<>(initialSolution.aisles()));
-
-                boolean isViable = this.move(currentSolution);
-
-                if (!isViable) {
-                    this.next();
-                    continue;
+                if (!this.move(currentSolution, aisleIndex)) {
+                    return null; 
                 }
 
-                double currentQuality = computeObjectiveFunction(currentSolution);
+                double currentQuality = computeObjectiveFunction(decodeRVNDSolution(currentSolution));
 
-                /* System.out.println("Current Solution: " + currentSolution + " with quality: " + currentQuality);
-                System.out.println("Best Solution: " + bestSolution + " with quality: " + bestQuality); */
-                if (currentQuality > bestQuality) {
-                    bestQuality = currentQuality;
-                    bestSolution = currentSolution;
-                    /* System.out.println("New best solution found: " + bestQuality); */
-                }
-                
-                this.next();
-            }
+                return new AbstractMap.SimpleEntry<>(currentSolution, currentQuality);
+            }).filter(Objects::nonNull)
+            .max(Comparator.comparingDouble(AbstractMap.SimpleEntry::getValue))
+            .map(AbstractMap.SimpleEntry::getKey) // Extrai a solução
+            .orElse(bestSolution);
 
-            /* System.out.println("Best Solution after Remove Aisle Neighborhood: " + bestSolution + " with quality: " + bestQuality); */
             return bestSolution;
         }
 
         //A move configures a removal of an aisle and, from there, the removal of any other aisle that can be removed
         @Override
-        boolean move(RVNDSolution solution) {
-            /* System.out.println("Moving Remove Aisle Neighborhood in solution: " + solution + " with iterator: " + iterator); */
+        boolean move(RVNDSolution solution, int iterator) {
+            if(iterator >= solution.aisles().size()) return false;
+
             solution.aisles().remove(iterator);
 
             if(!isSolutionFeasible(solution, false)) return false;
@@ -357,8 +314,6 @@ public class ChallengeSolver {
             }
 
             return true;
-
-            /* System.out.println("Solution after move: " + solution); */
         }
 
         int getNextRemovableAisle(RVNDSolution solution) {
@@ -389,51 +344,41 @@ public class ChallengeSolver {
         ArrayList<Integer> candidateOrders;
 
         @Override
-        boolean hasNext(RVNDSolution solution) {
-            return iterator < (orders.size() - solution.orders().size()) && iterator < 100;
-        }
-        
-        @Override
         RVNDSolution explore(RVNDSolution initialSolution, double initialQuality) {
-            /* System.out.println("Exploring Add Order Neighborhood"); */
-
             RVNDSolution bestSolution = initialSolution;
-            double bestQuality = initialQuality;
 
-            this.candidateOrders = IntStream.range(0, orders.size()).boxed().filter((order) -> !initialSolution.orders().contains(order)).collect(Collectors.toCollection(ArrayList::new));
+            this.candidateOrders = IntStream.range(0, orders.size())
+                .boxed()
+                .filter(order -> !initialSolution.orders().contains(order))
+                .collect(Collectors.toCollection(ArrayList::new));
+
             Collections.shuffle(candidateOrders);
 
-            /* System.out.println("Candidate Orders: " + candidateOrders);
+            bestSolution = candidateOrders.parallelStream()
+                .limit(this.MAX_ITERATIONS)
+                .map(orderIndex -> {
+                    RVNDSolution currentSolution = new RVNDSolution(
+                        new ArrayList<>(initialSolution.orders()), 
+                        new ArrayList<>(initialSolution.aisles())
+                    );
 
-            System.out.println("Initial Solution: " + bestSolution + " with quality: " + bestQuality); */
+                    if (!this.move(currentSolution, orderIndex)) return null;
 
-            this.start();
-            while (this.hasNext(initialSolution)) {
-                RVNDSolution currentSolution = new RVNDSolution(new ArrayList<>(initialSolution.orders()), new ArrayList<>(initialSolution.aisles()));
-
-                boolean isViable = this.move(currentSolution);
-
-                if (!isViable) {
-                    this.next();
-                    continue;
-                }
-
-                double currentQuality = computeObjectiveFunction(currentSolution);
-
-                if (currentQuality > bestQuality) {
-                    bestQuality = currentQuality;
-                    bestSolution = currentSolution;
-                }
-
-                this.next();
-            }
+                    double currentQuality = computeObjectiveFunction(decodeRVNDSolution(currentSolution));
+                    return new AbstractMap.SimpleEntry<>(currentSolution, currentQuality);
+                })
+                .filter(Objects::nonNull)
+                .max(Comparator.comparingDouble(AbstractMap.SimpleEntry::getValue))
+                .map(AbstractMap.SimpleEntry::getKey)
+                .orElse(bestSolution);
 
             return bestSolution;
         }
 
         @Override
-        boolean move(RVNDSolution solution) {
-            /* System.out.println("Moving Add Order Neighborhood in solution: " + solution + " with iterator: " + iterator); */
+        boolean move(RVNDSolution solution, int iterator) {
+            if(iterator >= candidateOrders.size()) return false;
+
             solution.orders().add(candidateOrders.get(iterator));
 
             if(!isSolutionFeasible(solution, false)) return false;
@@ -443,8 +388,6 @@ public class ChallengeSolver {
                 solution.orders().add(candidateOrders.get(nextCandidateOrder));
                 nextCandidateOrder = getNextCandidateOrderToAdd(solution);
             }
-
-            System.out.println("Solution after move: " + solution + "with iterator: " + iterator);
 
             return true;
         }
@@ -473,6 +416,75 @@ public class ChallengeSolver {
         }
     }
 
+    class Shake extends Neighborhood {
+        @Override
+        RVNDSolution explore(RVNDSolution initialSolution, double initialQuality) {
+            RVNDSolution bestSolution = initialSolution;
+
+            bestSolution = IntStream.range(0, this.MAX_ITERATIONS).parallel().mapToObj((orderIndex) ->{
+                RVNDSolution currentSolution = new RVNDSolution(
+                    new ArrayList<>(initialSolution.orders()), 
+                    new ArrayList<>(initialSolution.aisles())
+                );
+
+                if (!this.move(currentSolution, orderIndex)) {
+                    return null; 
+                }
+
+                double currentQuality = computeObjectiveFunction(decodeRVNDSolution(currentSolution));
+
+                return new AbstractMap.SimpleEntry<>(currentSolution, currentQuality);
+            }).filter(Objects::nonNull)
+            .max(Comparator.comparingDouble(AbstractMap.SimpleEntry::getValue))
+            .map(AbstractMap.SimpleEntry::getKey) // Extrai a solução
+            .orElse(bestSolution);
+
+            return bestSolution;
+        }
+
+        @Override
+        boolean move(RVNDSolution solution, int iterator) {
+            Random rand = new Random();
+
+            int ordersSize = solution.orders().size();
+            int aislesSize = solution.aisles().size();
+
+            int numberOfOrdersToRemove = ordersSize > 0 ? rand.nextInt((int) Math.max(1, ordersSize * 0.1)) : 0;
+            int numberOfAislesToRemove = aislesSize > 0 ? rand.nextInt((int) Math.max(1, aislesSize * 0.1)) : 0;
+
+            for (int i = 0; i < numberOfOrdersToRemove && !solution.orders().isEmpty(); i++) {
+                int orderIndex = rand.nextInt(solution.orders().size());
+                solution.orders().remove(orderIndex);
+            }
+
+            for(int i = 0; i < numberOfAislesToRemove && !solution.aisles().isEmpty(); i++) {
+                int aisleIndex = rand.nextInt(solution.aisles.size());
+                solution.aisles().remove(aisleIndex);
+            }
+
+            ordersSize = solution.orders().size();
+            aislesSize = solution.aisles().size();
+
+            int numberOfOrdersToAdd = orders.size() - ordersSize > 0 ? rand.nextInt((int) Math.max(1, (orders.size() - ordersSize) * 0.1)) : 0;
+            int numberOfAislesToAdd = aisles.size() - aislesSize > 0 ? rand.nextInt((int) Math.max(1, (aisles.size() - aislesSize) * 0.1)) : 0;
+
+            for(int i = 0; i < numberOfOrdersToAdd; i++) {
+                int orderIndex = rand.nextInt(orders.size());
+                if(solution.orders().contains(orderIndex)) continue;
+                solution.orders().add(orderIndex);
+            }
+
+            for(int i = 0; i < numberOfAislesToAdd; i++) {
+                int aisleIndex = rand.nextInt(aisles.size());
+                if(solution.aisles().contains(aisleIndex)) continue;
+                solution.aisles().add(aisleIndex);
+            }
+
+            return isSolutionFeasible(solution, false);
+        }
+
+    }
+
     private RVNDSolution randomVariableNeighborhoodDescent(RVNDSolution solution, double quality) {
         RVNDSolution bestSolution = solution;
         double bestQuality = quality;
@@ -480,40 +492,26 @@ public class ChallengeSolver {
         ArrayList<Neighborhood> neighborhoods = new ArrayList<>();
         neighborhoods.add(new RemoveAisle());
         neighborhoods.add(new AddOrder());
+        neighborhoods.add(new Shake());
 
         Collections.shuffle(neighborhoods);
 
         for (Neighborhood neighborhood : neighborhoods) {
             RVNDSolution currentSolution = neighborhood.explore(bestSolution, bestQuality);
-            double currentQuality = computeObjectiveFunction(currentSolution);
+            double currentQuality = computeObjectiveFunction(decodeRVNDSolution(bestSolution));
 
             if (currentQuality > bestQuality) {
                 bestQuality = currentQuality;
                 bestSolution = currentSolution;
+                System.out.println("New best solution found by neighborhood exploration: " + bestQuality + " current neighborhood: " + neighborhood.getClass().getName());
             }
         }
 
         return bestSolution;
     }
 
-    public ChallengeSolution decodeIndividual(Individual individual) {
-        ArrayList<Boolean> genome = individual.genome;
-        Set<Integer> selectedOrders = new HashSet<>();
-        Set<Integer> selectedAisles = new HashSet<>();
-
-        for (int i = 0; i < orders.size(); i++) {
-            if (genome.get(i)) {
-                selectedOrders.add(i);
-            }
-        }
-
-        for (int i = orders.size(); i < genome.size(); i++) {
-            if (genome.get(i)) {
-                selectedAisles.add(i - orders.size());
-            }
-        }
-
-        return new ChallengeSolution(selectedOrders, selectedAisles);
+    protected ChallengeSolution decodeRVNDSolution(RVNDSolution solution) {
+        return new ChallengeSolution(new HashSet<>(solution.orders()), new HashSet<>(solution.aisles));
     }
 
     /*
@@ -577,18 +575,12 @@ public class ChallengeSolver {
         return true;
     }
 
-    protected double computeObjectiveFunction(RVNDSolution challengeSolution) {
-        List<Integer> selectedOrders = challengeSolution.orders();
-        List<Integer> visitedAisles = challengeSolution.aisles();
+    protected double computeObjectiveFunction(ChallengeSolution challengeSolution) {
+        Set<Integer> selectedOrders = challengeSolution.orders();
+        Set<Integer> visitedAisles = challengeSolution.aisles();
         if (selectedOrders == null || visitedAisles == null || selectedOrders.isEmpty() || visitedAisles.isEmpty()) {
             return 0.0;
         }
-
-        int penalty = 0;
-        if (!isSolutionFeasible(challengeSolution, false)) {
-            penalty -= applyPenalty(challengeSolution);
-        }
-
         int totalUnitsPicked = 0;
 
         // Calculate total units picked
@@ -602,70 +594,7 @@ public class ChallengeSolver {
         int numVisitedAisles = visitedAisles.size();
 
         // Objective function: total units picked / number of visited aisles
-        return (double) (totalUnitsPicked / numVisitedAisles) + penalty;
+        return (double) totalUnitsPicked / numVisitedAisles;
     }
 
-    protected int applyPenalty(RVNDSolution challengeSolution) {
-        int penalty = 0;
-        List<Integer> selectedOrders = challengeSolution.orders();
-        List<Integer> visitedAisles = challengeSolution.aisles();
-
-        int[] totalUnitsPicked = new int[nItems];
-        int[] totalUnitsAvailable = new int[nItems];
-
-        // Calculate total units picked
-        for (int order : selectedOrders) {
-            for (Map.Entry<Integer, Integer> entry : orders.get(order).entrySet()) {
-                totalUnitsPicked[entry.getKey()] += entry.getValue();
-            }
-        }
-
-        // Calculate total units available
-        for (int aisle : visitedAisles) {
-            for (Map.Entry<Integer, Integer> entry : aisles.get(aisle).entrySet()) {
-                totalUnitsAvailable[entry.getKey()] += entry.getValue();
-            }
-        }
-
-        // Check if the total units picked are within bounds
-        int totalUnits = Arrays.stream(totalUnitsPicked).sum();
-        if (totalUnits < waveSizeLB) {
-            penalty += (waveSizeLB - totalUnits) * nItems;
-        }
-
-        if (totalUnits > waveSizeUB) {
-            penalty += (totalUnits - waveSizeLB) * nItems;
-        }
-
-        // Check if the units picked do not exceed the units available
-        for (int i = 0; i < nItems; i++) {
-            if (totalUnitsPicked[i] > totalUnitsAvailable[i]) {
-                penalty += (totalUnitsPicked[i] - totalUnitsAvailable[i]) * nItems;
-            }
-        }
-
-        return penalty;
-
-    }
-
-    public enum PopulationSelectionType {
-        ELITIST, TOURNAMENT
-    }
-
-    public static void chooseNextGeneration(ArrayList<Individual> population, int populationSize, PopulationSelectionType selectionType) {
-        if (selectionType == PopulationSelectionType.ELITIST) {
-            population.subList(populationSize, population.size()).clear();
-        } else if (selectionType == PopulationSelectionType.TOURNAMENT) {
-            Random rand = new Random();
-            while (population.size() > populationSize) {
-                int index1 = rand.nextInt(population.size());
-                int index2 = rand.nextInt(population.size());
-                if (population.get(index1).fitness > population.get(index2).fitness) {
-                    population.remove(index2);
-                } else {
-                    population.remove(index1);
-                }
-            }
-        }
-    }
 }
