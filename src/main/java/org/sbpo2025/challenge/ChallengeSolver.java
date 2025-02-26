@@ -82,7 +82,7 @@ public class ChallengeSolver {
 
             /* System.out.println("Iteration " + currentIteration); */
 
-            RVNDSolution currentSolution = constructGreedyRandomizedSolution(alpha);
+            RVNDSolution currentSolution = currentIteration % 3 == 0 ? constructGreedyRandomizedSolution(alpha) : bestSolution;
             double currentQuality = bestQuality;
 
             currentSolution = randomVariableNeighborhoodDescent(currentSolution, currentQuality);
@@ -321,7 +321,7 @@ public class ChallengeSolver {
                     .map(AbstractMap.SimpleEntry::getKey) // Extrai a solução
                     .orElse(bestSolution);
 
-            /* System.out.println("Finished Exploring Remove Aisle Neighborhood"); */
+           /*  System.out.println("Finished Exploring Remove Aisle Neighborhood"); */
             return bestSolution;
         }
 
@@ -377,7 +377,7 @@ public class ChallengeSolver {
 
         @Override
         RVNDSolution explore(RVNDSolution initialSolution, double initialQuality) {
-            /* System.out.println("Exploring Add Order Neighborhood"); */
+           /*  System.out.println("Exploring Add Order Neighborhood"); */
             RVNDSolution bestSolution = initialSolution;
 
             this.candidateOrders = IntStream.range(0, orders.size())
@@ -538,6 +538,7 @@ public class ChallengeSolver {
 
         @Override
         RVNDSolution explore(RVNDSolution initialSolution, double initialQuality) {
+            /* System.out.println("Exploring One Aisle Multiple Orders Neighborhood"); */
             RVNDSolution bestSolution = initialSolution;
 
             this.remainingAisles = IntStream.range(0, aisles.size())
@@ -558,7 +559,7 @@ public class ChallengeSolver {
                             .reversed())
                     .collect(Collectors.toList());
 
-            bestSolution = remainingAisles.parallelStream().limit(this.MAX_ITERATIONS).map((aisleIndex) -> {
+            bestSolution = IntStream.range(0, remainingAisles.size()).parallel().mapToObj((aisleIndex) ->{
                 RVNDSolution currentSolution = new RVNDSolution(
                         new ArrayList<>(initialSolution.orders()),
                         new ArrayList<>(initialSolution.aisles()));
@@ -575,6 +576,7 @@ public class ChallengeSolver {
                     .map(AbstractMap.SimpleEntry::getKey) // Extrai a solução
                     .orElse(bestSolution);
 
+            /* System.out.println("Finished Exploring One Aisle Multiple Orders Neighborhood"); */
             return bestSolution;
         }
 
@@ -582,6 +584,8 @@ public class ChallengeSolver {
         boolean move(RVNDSolution solution, int iterator) {
             if (iterator >= this.remainingAisles.size())
                 return false;
+
+            /* System.out.println("Performing a move in One Aisle Multiple Orders Neighborhood " + iterator); */
 
             solution.aisles().add(remainingAisles.get(iterator));
 
@@ -623,6 +627,75 @@ public class ChallengeSolver {
         }
     }
 
+    class OneOrderMultipleAisles extends Neighborhood {
+        @Override
+        RVNDSolution explore(RVNDSolution initialSolution, double initialQuality) {
+            RVNDSolution bestSolution = initialSolution;
+
+            initialSolution.orders().sort(Comparator.comparingInt(order -> orders.get(order).values().stream().mapToInt(Integer::intValue).sum()));
+
+            bestSolution = IntStream.range(0, initialSolution.orders().size()).parallel().mapToObj((orderIndex) -> {
+                RVNDSolution currentSolution = new RVNDSolution(
+                        new ArrayList<>(initialSolution.orders()),
+                        new ArrayList<>(initialSolution.aisles()));
+
+                if (!this.move(currentSolution, orderIndex)) {
+                    return null;
+                }
+
+                double currentQuality = computeObjectiveFunction(decodeRVNDSolution(currentSolution));
+
+                return new AbstractMap.SimpleEntry<>(currentSolution, currentQuality);
+            }).filter(Objects::nonNull)
+                    .max(Comparator.comparingDouble(AbstractMap.SimpleEntry::getValue))
+                    .map(AbstractMap.SimpleEntry::getKey)
+                    .orElse(bestSolution);
+
+            return bestSolution;
+        }
+
+        @Override
+        boolean move(RVNDSolution solution, int iterator) {
+            if(iterator >= solution.orders().size())
+                return false;
+
+            solution.orders().remove(iterator);
+
+            int nextRemovableAisle = getNextRemovableAisle(solution);
+
+            while (nextRemovableAisle != -1) {
+                solution.aisles().remove(nextRemovableAisle);
+                nextRemovableAisle = getNextRemovableAisle(solution);
+            }
+
+            return isSolutionFeasible(solution, false);
+        }
+
+        int getNextRemovableAisle(RVNDSolution solution) {
+            HashMap<Integer, Integer> itemsLeftInAisles = getItemsLeftInAisles(new HashSet<>(solution.orders()),
+                    new HashSet<>(solution.aisles()));
+
+            for (int i = 0; i < solution.aisles().size(); i++) {
+                int aisleIndex = solution.aisles().get(i);
+                HashMap<Integer, Integer> aisleItems = new HashMap<>(aisles.get(aisleIndex));
+                boolean canRemove = true;
+
+                for (Map.Entry<Integer, Integer> entry : aisleItems.entrySet()) {
+                    int item = entry.getKey();
+                    int quantity = entry.getValue();
+                    if (itemsLeftInAisles.getOrDefault(item, 0) < quantity) {
+                        canRemove = false;
+                        break;
+                    }
+                }
+
+                if (canRemove)
+                    return i;
+            }
+            return -1;
+        }
+    }
+
     private RVNDSolution randomVariableNeighborhoodDescent(RVNDSolution solution, double quality) {
         RVNDSolution bestSolution = solution;
         double bestQuality = quality;
@@ -632,10 +705,12 @@ public class ChallengeSolver {
         neighborhoods.add(new AddOrder());
         neighborhoods.add(new Shake());
         neighborhoods.add(new OneAisleMultipleOrders());
+        neighborhoods.add(new OneOrderMultipleAisles());
 
         Collections.shuffle(neighborhoods);
 
-        for (Neighborhood neighborhood : neighborhoods) {
+        for (int i = 0; i < 3; i++) {
+            Neighborhood neighborhood = neighborhoods.get(i);
             RVNDSolution currentSolution = neighborhood.explore(bestSolution, bestQuality);
             double currentQuality = computeObjectiveFunction(decodeRVNDSolution(bestSolution));
 
