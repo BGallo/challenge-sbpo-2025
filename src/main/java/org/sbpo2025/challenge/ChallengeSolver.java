@@ -1,5 +1,9 @@
 package org.sbpo2025.challenge;
 
+/* import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException; */
 import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -64,6 +68,24 @@ public class ChallengeSolver {
         }
     }
 
+    /* public static void writeNumberToFile(String number, String fileName) {
+        File file = new File(fileName);
+        File parentDir = file.getParentFile();
+  
+        if (parentDir != null && !parentDir.exists()) {
+            parentDir.mkdirs();
+        }
+
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(file, true))) {
+            writer.write(" ");
+            writer.write(number);
+            System.out.println("Número adicionado ao arquivo com sucesso.");
+        } catch (IOException e) {
+            System.err.println("Ocorreu um erro ao escrever no arquivo.");
+            e.printStackTrace();
+        }
+    } */
+
     public ChallengeSolution solve(StopWatch stopWatch) {
         double alpha = 0.50;
 
@@ -76,6 +98,7 @@ public class ChallengeSolver {
         System.out.println("is Feaseble: " + isSolutionFeasible(bestSolution, true));
 
         int currentIteration = 0;
+        /* int maxIterations = 1; */
         int maxIterations = Integer.MAX_VALUE;
         while (System.currentTimeMillis() - startTime < MAX_RUNTIME && currentIteration < maxIterations) {
             currentIteration++;
@@ -91,10 +114,10 @@ public class ChallengeSolver {
             if (currentQuality > bestQuality) {
                 bestQuality = currentQuality;
                 bestSolution = currentSolution;
-                /*
-                 * System.out.println("New best solution found in Iteration " + currentIteration
-                 * + ": " + bestQuality);
-                 */
+                
+                  /* System.out.println("New best solution found in Iteration " + currentIteration
+                  + ": " + bestQuality); */
+                
             }
         }
 
@@ -106,6 +129,9 @@ public class ChallengeSolver {
             System.out.println("É viável: " + isSolutionFeasible(bestSolution, true));
             /* System.out.println("Solution: " + bestSolution); */
         }
+
+       /*  String formattedNumber = String.format("%.3f", graspFitness);
+        writeNumberToFile(formattedNumber, "number_output.txt");  */  
 
         return new ChallengeSolution(new HashSet<>(bestSolution.orders()), new HashSet<>(bestSolution.aisles()));
     }
@@ -301,10 +327,9 @@ public class ChallengeSolver {
             /* System.out.println("Exploring Remove Aisle Neighborhood"); */
             RVNDSolution bestSolution = initialSolution;
 
-            List<Integer> shuffledAisles = new ArrayList<>(initialSolution.aisles());
-            Collections.shuffle(shuffledAisles);
+            /* System.out.println("Initial Solution: " + initialSolution); */
 
-            bestSolution = shuffledAisles.parallelStream().limit(this.MAX_ITERATIONS).map((aisleIndex) -> {
+            bestSolution = IntStream.range(0, initialSolution.aisles().size()).limit(this.MAX_ITERATIONS).parallel().mapToObj((aisleIndex) -> {
                 RVNDSolution currentSolution = new RVNDSolution(
                         new ArrayList<>(initialSolution.orders()),
                         new ArrayList<>(initialSolution.aisles()));
@@ -318,10 +343,10 @@ public class ChallengeSolver {
                 return new AbstractMap.SimpleEntry<>(currentSolution, currentQuality);
             }).filter(Objects::nonNull)
                     .max(Comparator.comparingDouble(AbstractMap.SimpleEntry::getValue))
-                    .map(AbstractMap.SimpleEntry::getKey) // Extrai a solução
+                    .map(AbstractMap.SimpleEntry::getKey)
                     .orElse(bestSolution);
 
-           /*  System.out.println("Finished Exploring Remove Aisle Neighborhood"); */
+            /* System.out.println("Finished Exploring Remove Aisle Neighborhood " + bestSolution); */
             return bestSolution;
         }
 
@@ -329,20 +354,27 @@ public class ChallengeSolver {
         // other aisle that can be removed
         @Override
         boolean move(RVNDSolution solution, int iterator) {
+            /* System.out.println(iterator + ": Performing a move in Remove Aisle Neighborhood " + iterator); */
             if (iterator >= solution.aisles().size())
                 return false;
 
             solution.aisles().remove(iterator);
+
+            /* System.out.println(iterator + ": Solution after removing aisle " + iterator + ": " + solution + " is feasible: "
+                    + isSolutionFeasible(solution, false)); */
 
             if (!isSolutionFeasible(solution, false))
                 return false;
 
             int nextRemovableAisle = getNextRemovableAisle(solution);
             while (nextRemovableAisle != -1) {
+                /* System.out.println(iterator + ": More aisles could be removed, removing aisle " + nextRemovableAisle); */
                 solution.aisles().remove(nextRemovableAisle);
                 nextRemovableAisle = getNextRemovableAisle(solution);
             }
 
+            /* System.out.println(iterator + ": Solution after removing aisles: " + solution + " is feasible: "
+                    + isSolutionFeasible(solution, false)); */
             return true;
         }
 
@@ -377,19 +409,24 @@ public class ChallengeSolver {
 
         @Override
         RVNDSolution explore(RVNDSolution initialSolution, double initialQuality) {
-           /*  System.out.println("Exploring Add Order Neighborhood"); */
+            /* System.out.println("Exploring Add Order Neighborhood"); */
             RVNDSolution bestSolution = initialSolution;
 
             this.candidateOrders = IntStream.range(0, orders.size())
                     .boxed()
+                    .parallel()
                     .filter(order -> !initialSolution.orders().contains(order))
                     .collect(Collectors.toCollection(ArrayList::new));
 
             Collections.shuffle(candidateOrders);
+            /* System.out.println("Candidate Orders: " + candidateOrders); */
 
-            bestSolution = candidateOrders.parallelStream()
+           /*  System.out.println("Initial Solution: " + initialSolution); */
+
+            bestSolution = IntStream.range(0, candidateOrders.size())
                     .limit(this.MAX_ITERATIONS)
-                    .map(orderIndex -> {
+                    .parallel()
+                    .mapToObj(orderIndex -> {
                         RVNDSolution currentSolution = new RVNDSolution(
                                 new ArrayList<>(initialSolution.orders()),
                                 new ArrayList<>(initialSolution.aisles()));
@@ -405,26 +442,33 @@ public class ChallengeSolver {
                     .map(AbstractMap.SimpleEntry::getKey)
                     .orElse(bestSolution);
 
-            /* System.out.println("Finished Exploring Add Order Neighborhood"); */
+           /*  System.out.println("Finished Exploring Add Order Neighborhood " + bestSolution); */
             return bestSolution;
         }
 
         @Override
         boolean move(RVNDSolution solution, int iterator) {
+            /* System.out.println(iterator + ": Performing a move in Add Order Neighborhood " + iterator); */
             if (iterator >= candidateOrders.size())
                 return false;
 
             solution.orders().add(candidateOrders.get(iterator));
+
+           /*  System.out.println(iterator + ": Solution after adding order " + iterator + ": " + solution + " is feasible: "
+                    + isSolutionFeasible(solution, false)); */
 
             if (!isSolutionFeasible(solution, false))
                 return false;
 
             int nextCandidateOrder = getNextCandidateOrderToAdd(solution);
             while (nextCandidateOrder != -1) {
+                /* System.out.println(iterator + ": More orders could be added, adding order " + nextCandidateOrder); */
                 solution.orders().add(candidateOrders.get(nextCandidateOrder));
                 nextCandidateOrder = getNextCandidateOrderToAdd(solution);
             }
 
+            /* System.out.println(iterator + ": Solution after adding orders: " + solution + " is feasible: "
+                    + isSolutionFeasible(solution, false)); */
             return true;
         }
 
@@ -432,11 +476,17 @@ public class ChallengeSolver {
             HashMap<Integer, Integer> itemsLeftInAisles = getItemsLeftInAisles(new HashSet<>(solution.orders()),
                     new HashSet<>(solution.aisles()));
 
+            int totalItems = solution.orders().stream().mapToInt(order -> orders.get(order).values().stream().mapToInt(Integer::intValue).sum()).sum();
+
             for (int i = 0; i < candidateOrders.size(); i++) {
                 int orderIndex = candidateOrders.get(i);
                 if (solution.orders().contains(orderIndex))
                     continue;
                 HashMap<Integer, Integer> orderItems = new HashMap<>(orders.get(orderIndex));
+
+                if(orderItems.values().stream().mapToInt(Integer::intValue).sum() + totalItems > waveSizeUB)
+                    continue;
+
                 boolean canAdd = true;
 
                 for (Map.Entry<Integer, Integer> entry : orderItems.entrySet()) {
@@ -462,6 +512,7 @@ public class ChallengeSolver {
             /* System.out.println("Exploring Shake Neighborhood"); */
             RVNDSolution bestSolution = initialSolution;
 
+            /* System.out.println("Initial Solution: " + initialSolution); */
             bestSolution = IntStream.range(0, this.MAX_ITERATIONS).parallel().mapToObj((orderIndex) -> {
                 RVNDSolution currentSolution = new RVNDSolution(
                         new ArrayList<>(initialSolution.orders()),
@@ -485,21 +536,27 @@ public class ChallengeSolver {
 
         @Override
         boolean move(RVNDSolution solution, int iterator) {
+            /* System.out.println(iterator + ": Performing a move in Shake Neighborhood " + iterator); */
             Random rand = new Random();
 
             int ordersSize = solution.orders().size();
             int aislesSize = solution.aisles().size();
 
-            int numberOfOrdersToRemove = ordersSize > 0 ? rand.nextInt((int) Math.max(1, ordersSize * 0.1)) : 0;
-            int numberOfAislesToRemove = aislesSize > 0 ? rand.nextInt((int) Math.max(1, aislesSize * 0.1)) : 0;
+            int numberOfOrdersToRemove = ordersSize > 0 ? rand.nextInt((int) Math.max(3, ordersSize * 0.1)) : 0;
+            int numberOfAislesToRemove = aislesSize > 0 ? rand.nextInt((int) Math.max(3, aislesSize * 0.1)) : 0;
+
+            /* System.out.println(iterator + ": Removing " + numberOfOrdersToRemove + " orders and " + numberOfAislesToRemove
+                    + " aisles"); */
 
             for (int i = 0; i < numberOfOrdersToRemove && !solution.orders().isEmpty(); i++) {
                 int orderIndex = rand.nextInt(solution.orders().size());
+                /* System.out.println(iterator + ": Removing order " + orderIndex); */
                 solution.orders().remove(orderIndex);
             }
 
             for (int i = 0; i < numberOfAislesToRemove && !solution.aisles().isEmpty(); i++) {
                 int aisleIndex = rand.nextInt(solution.aisles.size());
+                /* System.out.println(iterator + ": Removing aisle " + aisleIndex); */
                 solution.aisles().remove(aisleIndex);
             }
 
@@ -507,16 +564,19 @@ public class ChallengeSolver {
             aislesSize = solution.aisles().size();
 
             int numberOfOrdersToAdd = orders.size() - ordersSize > 0
-                    ? rand.nextInt((int) Math.max(1, (orders.size() - ordersSize) * 0.1))
+                    ? rand.nextInt((int) Math.max(3, (orders.size() - ordersSize) * 0.1))
                     : 0;
             int numberOfAislesToAdd = aisles.size() - aislesSize > 0
-                    ? rand.nextInt((int) Math.max(1, (aisles.size() - aislesSize) * 0.1))
+                    ? rand.nextInt((int) Math.max(3, (aisles.size() - aislesSize) * 0.1))
                     : 0;
 
+            /* System.out.println(iterator + ": Adding " + numberOfOrdersToAdd + " orders and " + numberOfAislesToAdd
+                    + " aisles"); */
             for (int i = 0; i < numberOfOrdersToAdd; i++) {
                 int orderIndex = rand.nextInt(orders.size());
                 if (solution.orders().contains(orderIndex))
                     continue;
+                /* System.out.println(iterator + ": Adding order " + orderIndex); */
                 solution.orders().add(orderIndex);
             }
 
@@ -524,9 +584,12 @@ public class ChallengeSolver {
                 int aisleIndex = rand.nextInt(aisles.size());
                 if (solution.aisles().contains(aisleIndex))
                     continue;
+                /* System.out.println(iterator + ": Adding aisle " + aisleIndex); */
                 solution.aisles().add(aisleIndex);
             }
 
+            /* System.out.println(iterator + ": Solution after shake: " + solution + " is feasible: "
+                    + isSolutionFeasible(solution, false)); */
             return isSolutionFeasible(solution, false);
         }
 
@@ -538,7 +601,7 @@ public class ChallengeSolver {
 
         @Override
         RVNDSolution explore(RVNDSolution initialSolution, double initialQuality) {
-            /* System.out.println("Exploring One Aisle Multiple Orders Neighborhood"); */
+           /*  System.out.println("Exploring One Aisle Multiple Orders Neighborhood"); */
             RVNDSolution bestSolution = initialSolution;
 
             this.remainingAisles = IntStream.range(0, aisles.size())
@@ -550,6 +613,8 @@ public class ChallengeSolver {
                             .reversed())
                     .collect(Collectors.toList());
 
+            /* System.out.println("Remaining Aisles: " + remainingAisles); */
+
             this.remainingOrders = IntStream.range(0, orders.size())
                     .boxed()
                     .parallel()
@@ -558,6 +623,12 @@ public class ChallengeSolver {
                             (Integer order) -> orders.get(order).values().stream().mapToInt(Integer::intValue).sum())
                             .reversed())
                     .collect(Collectors.toList());
+
+            Collections.shuffle(remainingOrders);
+
+            /* System.out.println("Remaining Orders: " + remainingOrders); */
+
+            /* System.out.println("Initial Solution: " + initialSolution); */
 
             bestSolution = IntStream.range(0, remainingAisles.size()).parallel().mapToObj((aisleIndex) ->{
                 RVNDSolution currentSolution = new RVNDSolution(
@@ -582,20 +653,25 @@ public class ChallengeSolver {
 
         @Override
         boolean move(RVNDSolution solution, int iterator) {
+            /* System.out.println(iterator + ": Performing a move in One Aisle Multiple Orders Neighborhood " + iterator); */
             if (iterator >= this.remainingAisles.size())
                 return false;
 
-            /* System.out.println("Performing a move in One Aisle Multiple Orders Neighborhood " + iterator); */
-
             solution.aisles().add(remainingAisles.get(iterator));
+
+            /* System.out.println(iterator + ": Solution after adding aisle " + iterator + ": " + solution + " is feasible: "
+                    + isSolutionFeasible(solution, false)); */
 
             int nextAddableOrder = getNextCandidateOrderToAdd(solution);
 
             while (nextAddableOrder != -1) {
                 solution.orders().add(remainingOrders.get(nextAddableOrder));
+                /* System.out.println(iterator + ": Adding another order " + nextAddableOrder); */
                 nextAddableOrder = getNextCandidateOrderToAdd(solution);
             }
 
+            /* System.out.println(iterator + ": Solution after adding orders: " + solution + " is feasible: "
+                    + isSolutionFeasible(solution, false)); */
             return isSolutionFeasible(solution, false);
         }
 
@@ -603,11 +679,17 @@ public class ChallengeSolver {
             HashMap<Integer, Integer> itemsLeftInAisles = getItemsLeftInAisles(new HashSet<>(solution.orders()),
                     new HashSet<>(solution.aisles()));
 
+            int totalItems = solution.orders().stream().mapToInt(order -> orders.get(order).values().stream().mapToInt(Integer::intValue).sum()).sum();
+
             for (int i = 0; i < remainingOrders.size(); i++) {
                 int orderIndex = remainingOrders.get(i);
                 if (solution.orders().contains(orderIndex))
                     continue;
                 HashMap<Integer, Integer> orderItems = new HashMap<>(orders.get(orderIndex));
+
+                if(orderItems.values().stream().mapToInt(Integer::intValue).sum() + totalItems > waveSizeUB)
+                    continue;
+
                 boolean canAdd = true;
 
                 for (Map.Entry<Integer, Integer> entry : orderItems.entrySet()) {
@@ -630,11 +712,14 @@ public class ChallengeSolver {
     class OneOrderMultipleAisles extends Neighborhood {
         @Override
         RVNDSolution explore(RVNDSolution initialSolution, double initialQuality) {
+            /* System.out.println("Exploring One Order Multiple Aisles Neighborhood"); */
             RVNDSolution bestSolution = initialSolution;
 
             initialSolution.orders().sort(Comparator.comparingInt(order -> orders.get(order).values().stream().mapToInt(Integer::intValue).sum()));
 
-            bestSolution = IntStream.range(0, initialSolution.orders().size()).parallel().mapToObj((orderIndex) -> {
+            /* System.out.println("Initial Solution: " + initialSolution); */
+
+            bestSolution = IntStream.range(0, initialSolution.orders().size()).limit(this.MAX_ITERATIONS).parallel().mapToObj((orderIndex) -> {
                 RVNDSolution currentSolution = new RVNDSolution(
                         new ArrayList<>(initialSolution.orders()),
                         new ArrayList<>(initialSolution.aisles()));
@@ -651,23 +736,31 @@ public class ChallengeSolver {
                     .map(AbstractMap.SimpleEntry::getKey)
                     .orElse(bestSolution);
 
+            /* System.out.println("Finished Exploring One Order Multiple Aisles Neighborhood " + bestSolution); */
             return bestSolution;
         }
 
         @Override
         boolean move(RVNDSolution solution, int iterator) {
+            /* System.out.println(iterator + ": Performing a move in One Order Multiple Aisles Neighborhood " + iterator); */
             if(iterator >= solution.orders().size())
                 return false;
 
             solution.orders().remove(iterator);
 
+            /* System.out.println(iterator + ": Solution after removing order " + iterator + ": " + solution + " is feasible: "
+                    + isSolutionFeasible(solution, false));
+ */
             int nextRemovableAisle = getNextRemovableAisle(solution);
 
             while (nextRemovableAisle != -1) {
                 solution.aisles().remove(nextRemovableAisle);
+                /* System.out.println(iterator + ": Removing another aisle " + nextRemovableAisle); */
                 nextRemovableAisle = getNextRemovableAisle(solution);
             }
 
+            /* System.out.println(iterator + ": Solution after removing aisles: " + solution + " is feasible: "
+                    + isSolutionFeasible(solution, false)); */
             return isSolutionFeasible(solution, false);
         }
 
@@ -676,6 +769,7 @@ public class ChallengeSolver {
                     new HashSet<>(solution.aisles()));
 
             for (int i = 0; i < solution.aisles().size(); i++) {
+
                 int aisleIndex = solution.aisles().get(i);
                 HashMap<Integer, Integer> aisleItems = new HashMap<>(aisles.get(aisleIndex));
                 boolean canRemove = true;
@@ -699,6 +793,9 @@ public class ChallengeSolver {
     private RVNDSolution randomVariableNeighborhoodDescent(RVNDSolution solution, double quality) {
         RVNDSolution bestSolution = solution;
         double bestQuality = quality;
+        
+        Collections.shuffle(solution.orders());
+        Collections.shuffle(solution.aisles());
 
         ArrayList<Neighborhood> neighborhoods = new ArrayList<>();
         neighborhoods.add(new RemoveAisle());
@@ -712,13 +809,13 @@ public class ChallengeSolver {
         for (int i = 0; i < 3; i++) {
             Neighborhood neighborhood = neighborhoods.get(i);
             RVNDSolution currentSolution = neighborhood.explore(bestSolution, bestQuality);
-            double currentQuality = computeObjectiveFunction(decodeRVNDSolution(bestSolution));
+            double currentQuality = computeObjectiveFunction(decodeRVNDSolution(currentSolution));
 
             if (currentQuality > bestQuality) {
                 bestQuality = currentQuality;
                 bestSolution = currentSolution;
-                System.out.println("New best solution found by neighborhood exploration: " + bestQuality
-                        + " current neighborhood: " + neighborhood.getClass().getName());
+                /* System.out.println("New best solution found by neighborhood exploration: " + bestQuality
+                        + " current neighborhood: " + neighborhood.getClass().getName()); */
             }
         }
 
