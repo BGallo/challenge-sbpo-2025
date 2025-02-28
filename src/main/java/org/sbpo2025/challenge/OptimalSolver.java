@@ -113,10 +113,10 @@ public class OptimalSolver extends ChallengeSolver {
             return 0.0;
         }
 
-        int penalty = 0;
+        /* int penalty = 0;
         if (!isSolutionFeasible(solution, false)) {
             penalty -= applyPenalty(solution);
-        }
+        } */
 
         int totalUnitsPicked = selectedOrders.stream()
                 .mapToInt(order -> orders.get(order).values().stream().mapToInt(Integer::intValue).sum())
@@ -124,6 +124,6 @@ public class OptimalSolver extends ChallengeSolver {
 
         int numVisitedAisles = visitedAisles.size();
 
-        return (double) totalUnitsPicked / numVisitedAisles + penalty;
+        return -1.0;//(double) totalUnitsPicked / numVisitedAisles + penalty;
     }
 }
