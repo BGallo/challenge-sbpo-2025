@@ -100,12 +100,24 @@ public class ChallengeSolver {
         int currentIteration = 0;
         /* int maxIterations = 1; */
         int maxIterations = Integer.MAX_VALUE;
+        Shake shake = new Shake();
+        int shakeTimer = 5;
+        int greedyTimer = 7;
         while (System.currentTimeMillis() - startTime < MAX_RUNTIME && currentIteration < maxIterations) {
             currentIteration++;
 
             /* System.out.println("Iteration " + currentIteration); */
 
-            RVNDSolution currentSolution = currentIteration % 3 == 0 ? constructGreedyRandomizedSolution(alpha) : bestSolution;
+            RVNDSolution currentSolution;
+
+            if (currentIteration % greedyTimer == 0) {
+                currentSolution = constructGreedyRandomizedSolution(alpha);
+            } else if (currentIteration % shakeTimer == 0) {
+                currentSolution = shake.explore(bestSolution, bestQuality);
+            } else {
+                currentSolution = bestSolution;
+            }
+
             double currentQuality = bestQuality;
 
             currentSolution = randomVariableNeighborhoodDescent(currentSolution, currentQuality);
@@ -115,9 +127,8 @@ public class ChallengeSolver {
                 bestQuality = currentQuality;
                 bestSolution = currentSolution;
                 
-                  /* System.out.println("New best solution found in Iteration " + currentIteration
+                /* System.out.println("New best solution found in Iteration " + currentIteration
                   + ": " + bestQuality); */
-                
             }
         }
 
@@ -261,6 +272,12 @@ public class ChallengeSolver {
             if (!possibleAisles.contains(aisle)) {
 
                 /* System.out.println("Adding aisle " + aisle + " to the possible aisles"); */
+
+                boolean aisleHasSomeItem = this.aisles.get(aisle).keySet().parallelStream()
+                        .anyMatch(item -> currentOrder.containsKey(item));
+
+                if (!aisleHasSomeItem)
+                    continue;
 
                 possibleAisles.add(aisle);
 
