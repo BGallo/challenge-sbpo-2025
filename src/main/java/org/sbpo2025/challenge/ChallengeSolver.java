@@ -117,16 +117,45 @@ public class ChallengeSolver {
     }
 
     public ChallengeSolution solve(StopWatch stopWatch) {
-        final int populationSize = 100;
-        final int maxIterations = Integer.MAX_VALUE;
-        Individual GaIndividual = geneticAlgorithmWithImprovedSelection(populationSize, maxIterations);
-        GaIndividual=removeUnusedAisles(GaIndividual);
-        GaIndividual=addOrdersWithoutNewAisles(GaIndividual);
-        if(GaIndividual != null) {
-            System.out.println(" Score GA:" + GaIndividual.fitness);
-        }
-        return decodeIndividual(GaIndividual);
+        // Create a ForkJoinPool to manage all parallel operations
+        ForkJoinPool customThreadPool = new ForkJoinPool(NUM_THREADS);
 
+        try {
+            final int populationSize = 100;
+            final int maxIterations = Integer.MAX_VALUE;
+
+            // Run the genetic algorithm in the custom thread pool
+            Individual GaIndividual = customThreadPool.submit(() ->
+                    geneticAlgorithmWithImprovedSelection(populationSize, maxIterations)
+            ).get(); // This blocks until the result is available
+
+            // Apply post-processing steps sequentially
+            GaIndividual = removeUnusedAisles(GaIndividual);
+            GaIndividual = addOrdersWithoutNewAisles(GaIndividual);
+
+            if(GaIndividual != null) {
+                System.out.println(" Score GA:" + GaIndividual.fitness);
+            }
+
+            // Force all parallel streams to complete by shutting down the pool
+            customThreadPool.shutdown();
+            try {
+                // Wait for all tasks to complete with a reasonable timeout
+                if (!customThreadPool.awaitTermination(3, TimeUnit.SECONDS)) {
+                    customThreadPool.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                customThreadPool.shutdownNow();
+            }
+
+            // Now that all threads are complete, return the solution
+            return decodeIndividual(GaIndividual);
+        }
+        catch (Exception e) {
+            System.err.println("Error in GA: " + e.getMessage());
+            customThreadPool.shutdownNow();
+            return new ChallengeSolution(new HashSet<>(), new HashSet<>());
+        }
     }
 
     public ArrayList<Individual> generateInitialPopulation(int size) {
@@ -508,9 +537,7 @@ public class ChallengeSolver {
      */
     private void updateGenome(Individual individual, Set<Integer> orders, Set<Integer> aisles) {
         // Reset genome
-        for (int i = 0; i < individual.genome.size(); i++) {
-            individual.genome.set(i, false);
-        }
+        individual.genome.replaceAll(ignored -> false);
 
         // Set orders
         for (int orderIndex : orders) {
@@ -1141,7 +1168,7 @@ public class ChallengeSolver {
         int currentIteration = 0;
         int iterationsWithoutImprovement = 0;
 
-        while (stopWatch.getDuration().getSeconds() < 540 && currentIteration < maxIterations) {
+        while (stopWatch.getDuration().getSeconds() < 60 && currentIteration < maxIterations) {
             currentIteration++;
 
             // Crossover
