@@ -7,10 +7,14 @@ import java.io.BufferedWriter;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.time.LocalTime;
+import java.time.temporal.ChronoUnit;
+import java.time.temporal.TemporalUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.time.temporal.TemporalUnit;
 
 public class Challenge {
 
@@ -109,6 +113,8 @@ public class Challenge {
     }
 
     public static void main(String[] args) {
+        LocalTime startTime = LocalTime.now();
+        System.out.println("Start time: " + startTime);
         // Start the stopwatch to track the running time
         StopWatch stopWatch = StopWatch.createStarted();
 
@@ -124,5 +130,8 @@ public class Challenge {
         ChallengeSolution challengeSolution = challengeSolver.solve(stopWatch);
 
         challenge.writeOutput(challengeSolution, args[1]);
+
+        LocalTime endTime = LocalTime.now();
+        System.out.println("Finished time: " + endTime + " (Elapsed time: " + startTime.until(endTime, ChronoUnit.MINUTES) + ")");
     }
 }

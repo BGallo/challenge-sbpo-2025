@@ -1,5 +1,6 @@
 package org.sbpo2025.challenge;
 
+import java.time.LocalTime;
 /* import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
@@ -25,7 +26,7 @@ import java.util.stream.IntStream;
 import org.apache.commons.lang3.time.StopWatch;
 
 public class ChallengeSolver {
-    private final long MAX_RUNTIME = 30000; // milliseconds; 30 s
+    private final long MAX_RUNTIME = 540000; // milliseconds; 30 s
     protected List<Map<Integer, Integer>> orders;
     protected List<Map<Integer, Integer>> aisles;
     protected int nItems;
