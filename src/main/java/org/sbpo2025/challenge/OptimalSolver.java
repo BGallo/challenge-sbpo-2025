@@ -114,7 +114,7 @@ public class OptimalSolver extends ChallengeSolver {
         }
 
         int penalty = 0;
-        if (!isSolutionFeasible(solution, false)) {
+        if (!isSolutionFeasible(solution)) {
             penalty -= applyPenalty(solution);
         }
 
