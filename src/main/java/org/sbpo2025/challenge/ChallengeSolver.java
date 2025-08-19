@@ -3,7 +3,6 @@ package org.sbpo2025.challenge;
 import org.apache.commons.lang3.time.StopWatch;
 
 import java.util.*;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -143,7 +142,119 @@ public class ChallengeSolver {
         return true;
     }
 
-    public double computeObjectiveFunction(ChallengeSolution challengeSolution){
-        return 0.0;
+    double computeObjectiveFunction(ChallengeSolution challengeSolution) {
+        Set<Integer> selectedOrders = challengeSolution.orders();
+        Set<Integer> visitedAisles = challengeSolution.aisles();
+        if (selectedOrders == null || visitedAisles == null || selectedOrders.isEmpty() || visitedAisles.isEmpty()) {
+            return 0.0;
+        }
+        int totalUnitsPicked = 0;
+
+        // Calculate total units picked
+        for (int order : selectedOrders) {
+            totalUnitsPicked += orders.get(order).values().stream()
+                    .mapToInt(Integer::intValue)
+                    .sum();
+        }
+
+        // Calculate the number of visited aisles
+        int numVisitedAisles = visitedAisles.size();
+
+        // Objective function: total units picked / number of visited aisles
+        return (double) totalUnitsPicked / numVisitedAisles;
+    }
+
+    private HashMap<Integer, Integer> getItemsLeftInAisles(Set<Integer> selectedOrders, Set<Integer> selectedAisles) {
+        ConcurrentMap<Integer, Integer> itemsLeftInAisles = new ConcurrentHashMap<>();
+
+        // Adds all aisles items to the itemsLeftInAisles
+        selectedAisles.parallelStream().forEach(aisle -> {
+            aisles.get(aisle).forEach((item, quantity) -> {
+                itemsLeftInAisles.merge(item, quantity, Integer::sum);
+            });
+        });
+
+        // Subtracts the items that were selected in the orders
+        selectedOrders.parallelStream().forEach(order -> {
+            orders.get(order).forEach((item, quantity) -> {
+                itemsLeftInAisles.merge(item, -quantity, Integer::sum);
+            });
+        });
+
+        /* System.out.println("Items left in the aisles: " + itemsLeftInAisles); */
+
+        return new HashMap<>(itemsLeftInAisles);
+    }
+
+    private Set<Integer> selectAislesForOrder(int order, Set<Integer> selectedAisles,
+        Map<Integer, Integer> itemsLeftInAisles) {
+        Map<Integer, Integer> currentOrder = this.orders.get(order);
+
+        Set<Integer> possibleAisles = new HashSet<>(selectedAisles);
+
+        List<Integer> aisleIndexList = IntStream.range(0, aisles.size()).boxed().collect(Collectors.toList());
+
+        Collections.shuffle(aisleIndexList);
+
+        /*
+         * System.out.println("Aisle Index order: " + aisleIndexList);
+         */
+        if (canOrderFitInAisles(currentOrder, itemsLeftInAisles)) {
+            /*
+             * System.out.println("This order " + currentOrder +
+             * "fits in the current aisles: " + itemsLeftInAisles);
+             */
+            return possibleAisles;
+        }
+
+        /* System.out.println("Checking aisles for order " + order); */
+        for (int aisle : aisleIndexList) {
+            if (!possibleAisles.contains(aisle)) {
+
+                /* System.out.println("Adding aisle " + aisle + " to the possible aisles"); */
+
+                possibleAisles.add(aisle);
+
+                // Adds new offered items to itemsLeftInAisles
+                for (Map.Entry<Integer, Integer> entry : this.aisles.get(aisle).entrySet()) {
+                    int item = entry.getKey();
+                    int quantity = entry.getValue();
+                    itemsLeftInAisles.put(item, itemsLeftInAisles.getOrDefault(item, 0) + quantity);
+                }
+
+                /*
+                 * System.out.println("Items left in the aisles after adding aisle " + aisle +
+                 * ": " + itemsLeftInAisles);
+                 */
+
+                if (canOrderFitInAisles(currentOrder, itemsLeftInAisles)) {
+                    /*
+                     * System.out.println("After adding aisles, this order " + currentOrder +
+                     * "fits in the current aisles: " + itemsLeftInAisles);
+                     */
+                    return possibleAisles;
+                }
+            }
+        }
+
+        /* System.out.println("No more aisles can fit for order " + order); */
+
+        return Collections.emptySet();
+    }
+
+    private boolean canOrderFitInAisles(Map<Integer, Integer> newOrder, Map<Integer, Integer> itemsLeftInAisles) {
+        for (Map.Entry<Integer, Integer> entry : newOrder.entrySet()) {
+            int item = entry.getKey();
+            int quantity = entry.getValue();
+            if (itemsLeftInAisles.getOrDefault(item, 0) < quantity) {
+                /*
+                 * System.out.println("Item " + item + " with quantity " + quantity +
+                 * " cannot fit in the aisles");
+                 */
+                return false;
+            }
+        }
+
+        return true;
     }
 }
