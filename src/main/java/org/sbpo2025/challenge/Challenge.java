@@ -2,6 +2,8 @@ package org.sbpo2025.challenge;
 
 import org.apache.commons.lang3.time.StopWatch;
 
+import com.gurobi.gurobi.GRBException;
+
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.FileReader;
@@ -108,7 +110,7 @@ public class Challenge {
         }
     }
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws GRBException {
         // Start the stopwatch to track the running time
         StopWatch stopWatch = StopWatch.createStarted();
 
