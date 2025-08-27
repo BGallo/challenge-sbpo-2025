@@ -826,6 +826,120 @@ public class ChallengeSolver {
         return new ChallengeSolution(new HashSet<>(solution.orders()), new HashSet<>(solution.aisles));
     }
 
+    public ChallengeSolution simulatedAnnealing(ChallengeSolution initialSolution, double initialTemperature, double coolingRate) {
+        Random rand = new Random();
+
+        ChallengeSolution currentSolution = new ChallengeSolution(
+            new HashSet<>(initialSolution.orders()),
+            new HashSet<>(initialSolution.aisles())
+        );
+        double currentValue = computeObjectiveFunction(currentSolution);
+
+        ChallengeSolution bestSolution = currentSolution;
+        double bestValue = currentValue;
+
+        double temperature = initialTemperature;
+
+        long startTime = System.currentTimeMillis();
+
+        while (System.currentTimeMillis() - startTime < MAX_RUNTIME) {
+            ChallengeSolution neighbor = generateNeighbor(currentSolution, rand);
+
+            if (!isSolutionFeasible(neighbor)) continue;
+
+            double neighborValue = computeObjectiveFunction(neighbor);
+            double delta = neighborValue - currentValue;
+
+            if (delta > 0) {
+                currentSolution = neighbor;
+                currentValue = neighborValue;
+            } else {
+                double acceptanceProb = Math.exp(delta / temperature);
+                if (rand.nextDouble() < acceptanceProb) {
+                    currentSolution = neighbor;
+                    currentValue = neighborValue;
+                }
+            }
+
+            if (currentValue > bestValue) {
+                bestSolution = currentSolution;
+                bestValue = currentValue;
+            }
+
+            temperature *= coolingRate;
+        }
+
+        return bestSolution;
+    }
+
+
+    private ChallengeSolution generateNeighbor(ChallengeSolution solution, Random rand) {
+        Set<Integer> newOrders = new HashSet<>(solution.orders());
+        Set<Integer> newAisles = new HashSet<>(solution.aisles());
+
+        int moveType = rand.nextInt(4); // 0=troca pedido, 1=add pedido, 2=remove pedido, 3=remove corredor
+
+        switch (moveType) {
+            case 0:
+                if (!newOrders.isEmpty()) {
+                    int orderToRemove = new ArrayList<>(newOrders).get(rand.nextInt(newOrders.size()));
+                    newOrders.remove(orderToRemove);
+
+                    int newOrder = rand.nextInt(orders.size());
+                    newOrders.add(newOrder);
+
+                    HashMap<Integer, Integer> itemsLeftInAisles = getItemsLeftInAisles(newOrders, newAisles);
+                    Set<Integer> orderAisles = selectAislesForOrder(newOrder, newAisles, itemsLeftInAisles);
+                    newAisles.addAll(orderAisles);
+                }
+                break;
+
+            case 1:
+                int candidateOrder = rand.nextInt(orders.size());
+                newOrders.add(candidateOrder);
+
+                HashMap<Integer, Integer> itemsLeftInAisles = getItemsLeftInAisles(newOrders, newAisles);
+                Set<Integer> orderAisles = selectAislesForOrder(candidateOrder, newAisles, itemsLeftInAisles);
+                newAisles.addAll(orderAisles);
+                break;
+
+            case 2:
+                if (!newOrders.isEmpty()) {
+                    int orderToRemove = new ArrayList<>(newOrders).get(rand.nextInt(newOrders.size()));
+                    newOrders.remove(orderToRemove);
+
+                    newAisles = recalculateAisles(newOrders, newAisles);
+                }
+                break;
+
+            case 3:
+                if (!newAisles.isEmpty()) {
+                    int aisleToRemove = new ArrayList<>(newAisles).get(rand.nextInt(newAisles.size()));
+                    newAisles.remove(aisleToRemove);
+
+                    ChallengeSolution testSolution = new ChallengeSolution(newOrders, newAisles);
+                    if (!isSolutionFeasible(testSolution)) {
+                        newAisles.add(aisleToRemove);
+                    }
+                }
+                break;
+        }
+
+        return new ChallengeSolution(newOrders, newAisles);
+    }
+
+    private Set<Integer> recalculateAisles(Set<Integer> ordersSet, Set<Integer> currentAisles) {
+        Set<Integer> newAisles = new HashSet<>();
+        HashMap<Integer, Integer> itemsLeftInAisles = new HashMap<>();
+
+        for (int order : ordersSet) {
+            Set<Integer> neededAisles = selectAislesForOrder(order, newAisles, itemsLeftInAisles);
+            newAisles.addAll(neededAisles);
+        }
+
+        return newAisles;
+    }
+
     /*
      * Get the remaining time in seconds
      */
