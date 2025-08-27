@@ -130,8 +130,35 @@ public class ChallengeSolver {
             /* System.out.println("Solution: " + bestSolution); */
         }
 
-       /*  String formattedNumber = String.format("%.3f", graspFitness);
-        writeNumberToFile(formattedNumber, "number_output.txt");  */  
+       currentIteration = 0;
+       startTime = System.currentTimeMillis();
+        while (System.currentTimeMillis() - startTime < MAX_RUNTIME && currentIteration < maxIterations) {
+            currentIteration++;
+
+            /* System.out.println("Iteration " + currentIteration); */
+
+            RVNDSolution currentSolution = currentIteration % 3 == 0 ? constructGreedyRandomizedSolution(alpha) : bestSolution;
+            double currentQuality = bestQuality;
+
+            currentSolution = randomVariableNeighborhoodDescent(currentSolution, currentQuality);
+            currentSolution = convertToRVNDSolution(simulatedAnnealing(decodeRVNDSolution(currentSolution), 1000000, 0.80));
+
+            if (currentQuality > bestQuality) {
+                bestQuality = currentQuality;
+                bestSolution = currentSolution;
+                
+                  /* System.out.println("New best solution found in Iteration " + currentIteration
+                  + ": " + bestQuality); */
+                
+            }
+        }
+
+        if (bestSolution != null) {
+            graspFitness = computeObjectiveFunction(decodeRVNDSolution(bestSolution));
+            System.out.println("Best Score GRASP com SA:" + graspFitness);
+            System.out.println("É viável: " + isSolutionFeasible(bestSolution, true));
+            /* System.out.println("Solution: " + bestSolution); */
+        }
 
         return new ChallengeSolution(new HashSet<>(bestSolution.orders()), new HashSet<>(bestSolution.aisles()));
     }
@@ -840,12 +867,10 @@ public class ChallengeSolver {
 
         double temperature = initialTemperature;
 
-        long startTime = System.currentTimeMillis();
-
-        while (System.currentTimeMillis() - startTime < MAX_RUNTIME) {
+        while (temperature > 1e-6) {
             ChallengeSolution neighbor = generateNeighbor(currentSolution, rand);
 
-            if (!isSolutionFeasible(neighbor)) continue;
+            if (!isSASolutionFeasible(neighbor)) continue;
 
             double neighborValue = computeObjectiveFunction(neighbor);
             double delta = neighborValue - currentValue;
@@ -918,7 +943,7 @@ public class ChallengeSolver {
                     newAisles.remove(aisleToRemove);
 
                     ChallengeSolution testSolution = new ChallengeSolution(newOrders, newAisles);
-                    if (!isSolutionFeasible(testSolution)) {
+                    if (!isSASolutionFeasible(testSolution)) {
                         newAisles.add(aisleToRemove);
                     }
                 }
@@ -994,6 +1019,59 @@ public class ChallengeSolver {
                 if (print) {
                     System.out.println("Motive: More Picked Items than offered by Aisles");
                 }
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    public RVNDSolution convertToRVNDSolution(ChallengeSolution challengeSolution) {
+        List<Integer> orders = new ArrayList<>(challengeSolution.orders());
+        List<Integer> aisles = new ArrayList<>(challengeSolution.aisles());
+
+        return new RVNDSolution(orders, aisles);
+    }
+
+
+    protected boolean isSASolutionFeasible(ChallengeSolution challengeSolution) {
+        Set<Integer> selectedOrders = challengeSolution.orders();
+        Set<Integer> visitedAisles = challengeSolution.aisles();
+        if (selectedOrders == null || visitedAisles == null || selectedOrders.isEmpty() || visitedAisles.isEmpty()) {
+            return false;
+        }
+
+        int[] totalUnitsPicked = new int[nItems];
+        int[] totalUnitsAvailable = new int[nItems];
+
+        // Calculate total units picked
+        for (int order : selectedOrders) {
+            for (Map.Entry<Integer, Integer> entry : orders.get(order).entrySet()) {
+                totalUnitsPicked[entry.getKey()] += entry.getValue();
+            }
+        }
+
+        // Calculate total units available
+        for (int aisle : visitedAisles) {
+            for (Map.Entry<Integer, Integer> entry : aisles.get(aisle).entrySet()) {
+                totalUnitsAvailable[entry.getKey()] += entry.getValue();
+            }
+        }
+
+        // Check if the total units picked are within bounds
+        int totalUnits = Arrays.stream(totalUnitsPicked).sum();
+        if (totalUnits < waveSizeLB) {
+            return false;
+        }
+        if (totalUnits > waveSizeUB) {
+
+            return false;
+        }
+
+        // Check if the units picked do not exceed the units available
+        for (int i = 0; i < nItems; i++) {
+            if (totalUnitsPicked[i] > totalUnitsAvailable[i]) {
+
                 return false;
             }
         }
