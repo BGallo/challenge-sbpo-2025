@@ -3,6 +3,7 @@ package org.sbpo2025.challenge;
 import org.apache.commons.lang3.time.StopWatch;
 
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -12,7 +13,7 @@ import java.util.concurrent.TimeUnit;
 import com.gurobi.gurobi.*;
 
 public class ChallengeSolver {
-    private final long MAX_RUNTIME = 600000; // milliseconds; 10 minutes
+    private final long MAX_RUNTIME = 60; // seconds
 
     protected List<Map<Integer, Integer>> orders;
     protected List<Map<Integer, Integer>> aisles;
@@ -21,7 +22,8 @@ public class ChallengeSolver {
     protected int waveSizeUB;
 
     public ChallengeSolver(
-            List<Map<Integer, Integer>> orders, List<Map<Integer, Integer>> aisles, int nItems, int waveSizeLB, int waveSizeUB) {
+            List<Map<Integer, Integer>> orders, List<Map<Integer, Integer>> aisles, int nItems, int waveSizeLB,
+            int waveSizeUB) {
         this.orders = orders;
         this.aisles = aisles;
         this.nItems = nItems;
@@ -30,155 +32,117 @@ public class ChallengeSolver {
     }
 
     public ChallengeSolution solve(StopWatch stopWatch) throws GRBException {
-        GRBEnv env = initializeGrbEnv();
+        GRBEnv env = initializeGrbEnv(stopWatch);
         if (env == null) {
             return null;
         }
 
-        ChallengeSolution solution = null;
 
-        try {
+        ChallengeSolution solution = getInitialViableSolution();
+
+        try{
             GRBModel model = new GRBModel(env);
 
-            //initializing variables
-            GRBVar[] orderVars = new GRBVar[orders.size()];
-            for (int i = 0; i < orders.size(); i++) {
-                orderVars[i] = model.addVar(0, 1, 0, GRB.BINARY, "x_" + i);
+            // Variáveis x_p: 1 se pedido p for selecionado
+            GRBVar[] x = new GRBVar[orders.size()];
+            for (int p = 0; p < orders.size(); p++) {
+                x[p] = model.addVar(0.0, 1.0, 0.0, GRB.BINARY, "x_" + p);
             }
 
-            GRBVar[] aisleVars = new GRBVar[aisles.size()];
-            for (int i = 0; i < aisles.size(); i++) {
-                aisleVars[i] = model.addVar(0, 1, 0, GRB.BINARY, "y_" + i);
+            // Variáveis y_c: 1 se corredor c for selecionado
+            GRBVar[] y = new GRBVar[aisles.size()];
+            for (int c = 0; c < aisles.size(); c++) {
+                y[c] = model.addVar(0.0, 1.0, 0.0, GRB.BINARY, "y_" + c);
             }
 
-            //continuos variable for numerator
-            GRBVar N = model.addVar(0, GRB.INFINITY, 0, GRB.CONTINUOUS, "N");
+            //Restrição quanto ao máximo e mínimo de itens
+            GRBLinExpr totalItemsExpr = new GRBLinExpr();
 
-            //continuous variable for denominator
-            GRBVar D = model.addVar(0, GRB.INFINITY, 0, GRB.CONTINUOUS, "D");
+            for (int p = 0; p < orders.size(); p++) {
+                int totalItemsInOrder = orders.get(p).values().stream().mapToInt(Integer::intValue).sum();
 
-            //Adding constraingts that ensure N and D are their respective sums
-            GRBLinExpr N_expr = new GRBLinExpr();
-            for (int i = 0; i < orders.size(); i++) {
-                int totalItems = orders.get(i).values().stream().mapToInt(Integer::intValue).sum();
-                N_expr.addTerm(totalItems, orderVars[i]);
-            }
-            model.addConstr(N, GRB.EQUAL, N_expr, "Quanto ao valor de N");
-
-            GRBLinExpr D_expr = new GRBLinExpr();
-            for (GRBVar y : aisleVars) {
-                D_expr.addTerm(1.0, y);
-            }
-            model.addConstr(D, GRB.EQUAL, D_expr, "Quanto ao valor de D");
-
-            //piecewise variables
-            int nPieces = aisleVars.length;
-
-            //every possible configuration of D
-            GRBVar[] dVars = new GRBVar[nPieces];
-
-            //every possible configuration of N *  d_i
-            GRBVar[] NdVars = new GRBVar[nPieces];
-
-            for (int i = 0; i < nPieces; i++) {
-                dVars[i] = model.addVar(0, 1, 0, GRB.BINARY, "d_" + (i));
-                NdVars[i] = model.addVar(0, GRB.INFINITY, 0, GRB.CONTINUOUS, "Nd_" + (i));
-            }
-            
-            //maximun value of N
-            int nMax = orders.stream()
-              .flatMap(map -> map.values().stream())
-              .mapToInt(Integer::intValue)
-              .sum();
-
-            int M = Math.min(nMax, waveSizeUB);
-
-            for (int i = 0; i < nPieces; i++) {
-                // Nd_i <= N
-                model.addConstr(NdVars[i], GRB.LESS_EQUAL, N, "c1_Nd_" + i);
-
-                // Nd_i <= nMax * d_i
-                GRBLinExpr upperNdBound = new GRBLinExpr();
-                upperNdBound.addTerm(1.0, NdVars[i]);
-                upperNdBound.addTerm(-M, dVars[i]);
-                model.addConstr(upperNdBound, GRB.LESS_EQUAL, 0.0, "c2_Nd_" + i);
-
-                // Nd_i >= N - M*(1 - d_i)
-                GRBLinExpr lowerNdBound = new GRBLinExpr();
-                lowerNdBound.addTerm(1.0, NdVars[i]);
-                lowerNdBound.addTerm(-1.0, N);
-                lowerNdBound.addTerm(M, dVars[i]);
-                model.addConstr(lowerNdBound, GRB.GREATER_EQUAL, -M, "c3_Nd_" + i);
-
-                // Nd_i >= 0
-                model.addConstr(NdVars[i], GRB.GREATER_EQUAL, 0.0, "c4_Nd_" + i);
+                totalItemsExpr.addTerm(totalItemsInOrder, x[p]);
             }
 
-            GRBLinExpr D_byPiece = new GRBLinExpr();
-            for (int i = 0; i < nPieces; i++) {
-                D_byPiece.addTerm(i + 1.0, dVars[i]);
-            }
-            model.addConstr(D, GRB.EQUAL, D_byPiece, "D_piecewise");
+            model.addRange(totalItemsExpr, waveSizeLB, waveSizeUB, "item_bounds");
 
-            GRBLinExpr currentPiece = new GRBLinExpr();
-            for (GRBVar dv : dVars) currentPiece.addTerm(1.0, dv);
-            model.addConstr(currentPiece, GRB.EQUAL, 1, "onePieceActive");
-
-            //Para cada Item I
+            //Restrição quanto a oferta e demanda
             for (int i = 0; i < nItems; i++) {
+                GRBLinExpr demandExpr = new GRBLinExpr();
+                GRBLinExpr supplyExpr = new GRBLinExpr();
 
-                //O número desse item nos pedidos
-                GRBLinExpr orderItems = new GRBLinExpr();
+                // soma da demanda dos pedidos para o item i
                 for (int p = 0; p < orders.size(); p++) {
-                    int qty = orders.get(p).getOrDefault(i, 0);
-                    if (qty > 0) orderItems.addTerm(qty, orderVars[p]);
+                    Integer n_pi = orders.get(p).get(i);
+                    if (n_pi != null) {
+                        demandExpr.addTerm(n_pi, x[p]);
+                    }
                 }
 
-                //Deve ser menor igual ao número desse item nos corredores
-                GRBLinExpr aislesItems = new GRBLinExpr();
+                // soma da oferta dos corredores para o item i
                 for (int c = 0; c < aisles.size(); c++) {
-                    int qty = aisles.get(c).getOrDefault(i, 0);
-                    if (qty > 0) aislesItems.addTerm(qty, aisleVars[c]);
-                }
-
-                model.addConstr(orderItems, GRB.LESS_EQUAL, aislesItems, "cover_item_" + i);
-            }
-
-            model.addConstr(N, GRB.GREATER_EQUAL, waveSizeLB, "LI");
-            model.addConstr(N, GRB.LESS_EQUAL, waveSizeUB, "LS");
-
-            GRBLinExpr obj = new GRBLinExpr();
-            for (int i = 0; i < nPieces; i++) {
-                obj.addTerm(1.0 / (i + 1), NdVars[i]);
-            }
-            model.setObjective(obj, GRB.MAXIMIZE);
-
-            model.optimize();
-
-            if (model.get(GRB.IntAttr.Status) == GRB.Status.OPTIMAL) {
-                Set<Integer> selectedOrders = new HashSet<>();
-                Set<Integer> selectedAisles = new HashSet<>();
-
-                for (int i = 0; i < orders.size(); i++) {
-                    if (orderVars[i].get(GRB.DoubleAttr.X) > 0.5) {
-                        selectedOrders.add(i);
+                    Integer n_ci = aisles.get(c).get(i);
+                    if (n_ci != null) { 
+                        supplyExpr.addTerm(n_ci, y[c]);
                     }
                 }
 
-                for (int i = 0; i < aisles.size(); i++) {
-                    if (aisleVars[i].get(GRB.DoubleAttr.X) > 0.5) {
-                        selectedAisles.add(i);
-                    }
+                // adiciona a restrição: demanda <= oferta
+                model.addConstr(demandExpr, GRB.LESS_EQUAL, supplyExpr, "cover_item_" + i);
+            }
+
+            Double lambda = computeObjectiveFunction(solution);
+
+            int iteration = 0;
+            while (stopWatch.getTime(TimeUnit.SECONDS) < MAX_RUNTIME) {
+                iteration++;
+
+                for (int p = 0; p < orders.size(); p++) {
+                    x[p].set(GRB.DoubleAttr.Start, solution.orders().contains(p) ? 1.0 : 0.0);
                 }
 
-                solution = new ChallengeSolution(selectedOrders, selectedAisles);
+                for (int c = 0; c < aisles.size(); c++) {
+                    y[c].set(GRB.DoubleAttr.Start, solution.aisles().contains(c) ? 1.0 : 0.0);
+                }
 
-                System.out.println("Objetivo ótimo: " + model.get(GRB.DoubleAttr.ObjVal));
-            } else {
-                System.out.println("Solução ótima não encontrada.");
+                //Parte de cima da fração
+                GRBLinExpr obj = new GRBLinExpr();
+                for (int p = 0; p < orders.size(); p++) {
+                    int totalItemsInOrder = orders.get(p).values().stream().mapToInt(Integer::intValue).sum();
+                    obj.addTerm(totalItemsInOrder, x[p]);
+                }
+
+                //Parte de baixo da fração
+                for (int c = 0; c < aisles.size(); c++) {
+                    obj.addTerm(-lambda, y[c]);
+                }
+
+                model.setObjective(obj, GRB.MAXIMIZE);
+
+                model.optimize();
+
+                if (model.get(GRB.IntAttr.SolCount) > 0) {
+
+                    solution = convertToChallengeSolution(x, y);
+
+                    if (model.get(GRB.DoubleAttr.ObjVal) < 1e-6) {
+                        break;
+                    }
+
+                    lambda = computeObjectiveFunction(solution);
+
+                    System.out.println("Iteração: " + iteration + " - lambda: " + lambda);
+
+                    model.getEnv().set(GRB.DoubleParam.TimeLimit, Math.min(MAX_RUNTIME - stopWatch.getTime(TimeUnit.SECONDS), MAX_RUNTIME/4));
+
+                } else {
+                    break;
+                }
+
             }
 
             model.dispose();
+
         } finally {
             env.dispose();
         }
@@ -188,10 +152,80 @@ public class ChallengeSolver {
         return solution;
     }
 
-    private GRBEnv initializeGrbEnv() {
+    private ChallengeSolution convertToChallengeSolution(GRBVar[] orderVars, GRBVar[] aisleVars) throws GRBException {
+        Set<Integer> selectedOrders = new HashSet<>();
+        Set<Integer> selectedAisles = new HashSet<>();
+
+        for (int i = 0; i < orderVars.length; i++) {
+            if (orderVars[i].get(GRB.DoubleAttr.X) > 0.5) {
+                selectedOrders.add(i);
+            }
+        }
+
+        for (int i = 0; i < aisleVars.length; i++) {
+            if (aisleVars[i].get(GRB.DoubleAttr.X) > 0.5) {
+                selectedAisles.add(i);
+            }
+        }
+
+        return new ChallengeSolution(selectedOrders, selectedAisles);
+    }
+
+    private ChallengeSolution getInitialViableSolution() {
+        Set<Integer> selectedOrders = new HashSet<>();
+        Set<Integer> selectedAisles = new HashSet<>();
+        int totalItems = 0;
+        HashMap<Integer, Integer> aisleCapacities = new HashMap<>();
+
+        for (int i = 0; i < aisles.size(); i++) {
+            selectedAisles.add(i);
+            for (Map.Entry<Integer, Integer> entry : aisles.get(i).entrySet()) {
+                aisleCapacities.put(entry.getKey(), entry.getValue() + aisleCapacities.getOrDefault(entry.getKey(), 0));
+            }
+        }
+
+        for (int i = 0; i < orders.size(); i++) {
+            int orderTotalItems = orders.get(i).values().stream().mapToInt(Integer::intValue).sum();
+            if (totalItems + orderTotalItems > waveSizeUB) {
+                continue;
+            }
+
+            boolean canFulfill = true;
+            for (Map.Entry<Integer, Integer> entry : orders.get(i).entrySet()) {
+                int itemIndex = entry.getKey();
+                int itemQuantity = entry.getValue();
+                if (aisleCapacities.getOrDefault(itemIndex, 0) < itemQuantity) {
+                    canFulfill = false;
+                    break;
+                }
+            }
+
+            if (canFulfill) {
+                selectedOrders.add(i);
+                totalItems += orderTotalItems;
+
+                for (Map.Entry<Integer, Integer> entry : orders.get(i).entrySet()) {
+                    int itemIndex = entry.getKey();
+                    int itemQuantity = entry.getValue();
+                    aisleCapacities.put(itemIndex, aisleCapacities.get(itemIndex) - itemQuantity);
+                }
+
+                if (totalItems >= waveSizeLB) {
+                    break;
+                }
+            }
+        }
+
+        return new ChallengeSolution(selectedOrders, selectedAisles);
+    }
+
+    private GRBEnv initializeGrbEnv(StopWatch stopWatch) {
         try {
             GRBEnv env = new GRBEnv(true);
             env.set("logFile", "mip1.log");
+            env.set(GRB.DoubleParam.TimeLimit, Math.min(MAX_RUNTIME - stopWatch.getTime(TimeUnit.SECONDS), MAX_RUNTIME/4));
+            env.set(GRB.IntParam.LogToConsole, 0);
+            env.set(GRB.IntParam.Threads, 1);
             env.start();
             return env;
         } catch (GRBException e) {
@@ -237,12 +271,14 @@ public class ChallengeSolver {
         // Check if the total units picked are within bounds
         int totalUnits = Arrays.stream(totalUnitsPicked).sum();
         if (totalUnits < waveSizeLB || totalUnits > waveSizeUB) {
+            System.out.println("Total units picked out of bounds");
             return false;
         }
 
         // Check if the units picked do not exceed the units available
         for (int i = 0; i < nItems; i++) {
             if (totalUnitsPicked[i] > totalUnitsAvailable[i]) {
+                System.out.println("Total units picked exceed available units");
                 return false;
             }
         }

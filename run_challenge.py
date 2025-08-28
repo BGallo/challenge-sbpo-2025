@@ -53,6 +53,11 @@ def run_benchmark(source_folder, input_folder, output_folder):
         timeout_command = "gtimeout"
     else:
         timeout_command = "timeout"
+        
+    if platform.system() == "Windows":
+        timeout_command = None  # Windows, vamos rodar direto
+    else:
+        timeout_command = "timeout"  # Linux/macOS
 
     # Get the path to the JAR file
     jar_path = os.path.join(source_folder, "target", "ChallengeSBPO2025-1.0.jar")

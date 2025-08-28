@@ -126,5 +126,7 @@ public class Challenge {
         ChallengeSolution challengeSolution = challengeSolver.solve(stopWatch);
 
         challenge.writeOutput(challengeSolution, args[1]);
+
+        LoggerUtils.appendColumnsToLine("results.log", challengeSolver.computeObjectiveFunction(challengeSolution));
     }
 }
