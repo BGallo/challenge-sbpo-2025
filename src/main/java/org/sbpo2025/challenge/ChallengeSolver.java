@@ -141,7 +141,8 @@ public class ChallengeSolver {
             double currentQuality = bestQuality;
 
             currentSolution = randomVariableNeighborhoodDescent(currentSolution, currentQuality);
-            currentSolution = convertToRVNDSolution(simulatedAnnealing(decodeRVNDSolution(currentSolution), 1000000, 0.80));
+            currentSolution = convertToRVNDSolution(simulatedAnnealing(decodeRVNDSolution(currentSolution), 100, 0.90));
+            currentQuality = computeObjectiveFunction(decodeRVNDSolution(currentSolution));
 
             if (currentQuality > bestQuality) {
                 bestQuality = currentQuality;
