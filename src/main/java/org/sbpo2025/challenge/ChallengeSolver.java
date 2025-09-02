@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit;
 import com.gurobi.gurobi.*;
 
 public class ChallengeSolver {
-    private final long MAX_RUNTIME = 600000; // milliseconds; 10 minutes
+    private final long MAX_RUNTIME = 60; // milliseconds; 10 minutes
 
     protected List<Map<Integer, Integer>> orders;
     protected List<Map<Integer, Integer>> aisles;
@@ -40,7 +40,7 @@ public class ChallengeSolver {
         try {
             GRBModel model = new GRBModel(env);
 
-            //initializing variables
+            //variaveis x e y originais para pedidos e corredores
             GRBVar[] orderVars = new GRBVar[orders.size()];
             for (int i = 0; i < orders.size(); i++) {
                 orderVars[i] = model.addVar(0, 1, 0, GRB.BINARY, "x_" + i);
@@ -51,41 +51,36 @@ public class ChallengeSolver {
                 aisleVars[i] = model.addVar(0, 1, 0, GRB.BINARY, "y_" + i);
             }
 
-            //continuos variable for numerator
-            GRBVar N = model.addVar(0, GRB.INFINITY, 0, GRB.CONTINUOUS, "N");
+            //variaveis que decidem qual valor o denominador assume
+            GRBVar[] dVars = new GRBVar[aisles.size()];
 
-            //continuous variable for denominator
-            GRBVar D = model.addVar(0, GRB.INFINITY, 0, GRB.CONTINUOUS, "D");
+            GRBVar[] NdVars = new GRBVar[aisles.size()];
 
-            //Adding constraingts that ensure N and D are their respective sums
-            GRBLinExpr N_expr = new GRBLinExpr();
-            for (int i = 0; i < orders.size(); i++) {
-                int totalItems = orders.get(i).values().stream().mapToInt(Integer::intValue).sum();
-                N_expr.addTerm(totalItems, orderVars[i]);
-            }
-            model.addConstr(N, GRB.EQUAL, N_expr, "Quanto ao valor de N");
-
-            GRBLinExpr D_expr = new GRBLinExpr();
-            for (GRBVar y : aisleVars) {
-                D_expr.addTerm(1.0, y);
-            }
-            model.addConstr(D, GRB.EQUAL, D_expr, "Quanto ao valor de D");
-
-            //piecewise variables
-            int nPieces = aisleVars.length;
-
-            //every possible configuration of D
-            GRBVar[] dVars = new GRBVar[nPieces];
-
-            //every possible configuration of N *  d_i
-            GRBVar[] NdVars = new GRBVar[nPieces];
-
-            for (int i = 0; i < nPieces; i++) {
+            for (int i = 0; i < aisles.size(); i++) {
                 dVars[i] = model.addVar(0, 1, 0, GRB.BINARY, "d_" + (i));
                 NdVars[i] = model.addVar(0, GRB.INFINITY, 0, GRB.CONTINUOUS, "Nd_" + (i));
             }
+
+            //restrição que obriga apenas um pedaço do denominador estar ativado
+            GRBLinExpr expr = new GRBLinExpr();
+            for (int i = 0; i < aisles.size(); i++) {
+                expr.addTerm(1.0, dVars[i]);
+            }
+
+            model.addConstr(expr, GRB.EQUAL, 1.0, "one_denom_active");
             
-            //maximun value of N
+            //restrição que liga o denominador com o número de corredores visitados
+            GRBLinExpr sumY = new GRBLinExpr();
+            GRBLinExpr denomByPiece = new GRBLinExpr();
+
+            for (int i = 0; i < aisles.size(); i++) {
+                sumY.addTerm(1.0, aisleVars[i]);
+                denomByPiece.addTerm(i + 1.0, dVars[i]);
+            }
+
+            model.addConstr(sumY, GRB.EQUAL, denomByPiece, "denominator_link");
+
+
             int nMax = orders.stream()
               .flatMap(map -> map.values().stream())
               .mapToInt(Integer::intValue)
@@ -93,69 +88,68 @@ public class ChallengeSolver {
 
             int M = Math.min(nMax, waveSizeUB);
 
-            for (int i = 0; i < nPieces; i++) {
-                // Nd_i <= N
-                model.addConstr(NdVars[i], GRB.LESS_EQUAL, N, "c1_Nd_" + i);
+            for (int i = 0; i < aisles.size(); i++) {
+                //lowerbound
+                GRBLinExpr lowerBound = new GRBLinExpr();
+                lowerBound.addTerm(waveSizeLB, dVars[i]);
+                model.addConstr(NdVars[i], GRB.GREATER_EQUAL, lowerBound, "lower_bound_" + i);
 
-                // Nd_i <= nMax * d_i
-                GRBLinExpr upperNdBound = new GRBLinExpr();
-                upperNdBound.addTerm(1.0, NdVars[i]);
-                upperNdBound.addTerm(-M, dVars[i]);
-                model.addConstr(upperNdBound, GRB.LESS_EQUAL, 0.0, "c2_Nd_" + i);
-
-                // Nd_i >= N - M*(1 - d_i)
-                GRBLinExpr lowerNdBound = new GRBLinExpr();
-                lowerNdBound.addTerm(1.0, NdVars[i]);
-                lowerNdBound.addTerm(-1.0, N);
-                lowerNdBound.addTerm(M, dVars[i]);
-                model.addConstr(lowerNdBound, GRB.GREATER_EQUAL, -M, "c3_Nd_" + i);
-
-                // Nd_i >= 0
-                model.addConstr(NdVars[i], GRB.GREATER_EQUAL, 0.0, "c4_Nd_" + i);
+                //upperbound
+                GRBLinExpr upperBound = new GRBLinExpr();
+                upperBound.addTerm(M, dVars[i]);
+                model.addConstr(NdVars[i], GRB.LESS_EQUAL, upperBound, "upper_bound_" + i);
             }
 
-            GRBLinExpr D_byPiece = new GRBLinExpr();
-            for (int i = 0; i < nPieces; i++) {
-                D_byPiece.addTerm(i + 1.0, dVars[i]);
+            //Restrições quanto ao limite máximo e mínimo
+            GRBLinExpr pickedItemsSum = new GRBLinExpr(); 
+
+            for (int i = 0; i < orderVars.length; i++) {
+                int sum = orders.get(i).values().stream().mapToInt(Integer::intValue).sum();
+
+                pickedItemsSum.addTerm(sum, orderVars[i]);
             }
-            model.addConstr(D, GRB.EQUAL, D_byPiece, "D_piecewise");
 
-            GRBLinExpr currentPiece = new GRBLinExpr();
-            for (GRBVar dv : dVars) currentPiece.addTerm(1.0, dv);
-            model.addConstr(currentPiece, GRB.EQUAL, 1, "onePieceActive");
+            GRBLinExpr NdSum = new GRBLinExpr();
+            for (int i = 0; i < aisles.size(); i++) {
+                NdSum.addTerm(1.0, NdVars[i]);
+            }
 
-            //Para cada Item I
-            for (int i = 0; i < nItems; i++) {
+            model.addConstr(NdSum, GRB.EQUAL, pickedItemsSum, "Nd_def");
 
-                //O número desse item nos pedidos
-                GRBLinExpr orderItems = new GRBLinExpr();
-                for (int p = 0; p < orders.size(); p++) {
-                    int qty = orders.get(p).getOrDefault(i, 0);
-                    if (qty > 0) orderItems.addTerm(qty, orderVars[p]);
+            //Restrição quanto a disponibilidade de items
+            for (int item = 0; item < nItems; item++) {
+                GRBLinExpr pickedItemExpr = new GRBLinExpr();
+                GRBLinExpr availableItemExpr = new GRBLinExpr();
+
+                for (int order = 0; order < orders.size(); order++) {
+                    int quantityInOrder = orders.get(order).getOrDefault(item, 0);
+                    if (quantityInOrder > 0) {
+                        pickedItemExpr.addTerm(quantityInOrder, orderVars[order]);
+                    }
                 }
 
-                //Deve ser menor igual ao número desse item nos corredores
-                GRBLinExpr aislesItems = new GRBLinExpr();
-                for (int c = 0; c < aisles.size(); c++) {
-                    int qty = aisles.get(c).getOrDefault(i, 0);
-                    if (qty > 0) aislesItems.addTerm(qty, aisleVars[c]);
+                for (int aisle = 0; aisle < aisles.size(); aisle++) {
+                    int quantityInAisle = aisles.get(aisle).getOrDefault(item, 0);
+                    if (quantityInAisle > 0) {
+                        availableItemExpr.addTerm(quantityInAisle, aisleVars[aisle]);
+                    }
                 }
 
-                model.addConstr(orderItems, GRB.LESS_EQUAL, aislesItems, "cover_item_" + i);
+                model.addConstr(pickedItemExpr, GRB.LESS_EQUAL, availableItemExpr, "item_availability_" + item);
             }
 
-            model.addConstr(N, GRB.GREATER_EQUAL, waveSizeLB, "LI");
-            model.addConstr(N, GRB.LESS_EQUAL, waveSizeUB, "LS");
-
+            //Função objetivo
             GRBLinExpr obj = new GRBLinExpr();
-            for (int i = 0; i < nPieces; i++) {
-                obj.addTerm(1.0 / (i + 1), NdVars[i]);
+
+            for (int i = 0; i < aisles.size(); i++) {
+                obj.addTerm((1.0 / (i + 1.0)), NdVars[i]);
             }
+
             model.setObjective(obj, GRB.MAXIMIZE);
 
             model.optimize();
 
-            if (model.get(GRB.IntAttr.Status) == GRB.Status.OPTIMAL) {
+            if (model.get(GRB.IntAttr.SolCount) > 0) {
                 Set<Integer> selectedOrders = new HashSet<>();
                 Set<Integer> selectedAisles = new HashSet<>();
 
@@ -192,6 +186,7 @@ public class ChallengeSolver {
         try {
             GRBEnv env = new GRBEnv(true);
             env.set("logFile", "mip1.log");
+            env.set(GRB.DoubleParam.TimeLimit, MAX_RUNTIME);
             env.start();
             return env;
         } catch (GRBException e) {
