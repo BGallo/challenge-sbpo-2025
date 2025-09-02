@@ -9,13 +9,14 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 public class ChallengeSolver {
-    private final long MAX_RUNTIME = 540000; // milliseconds; 5 s
+    private final long MAX_RUNTIME = 60000; // milliseconds; 5 s
     private final int NUM_THREADS = Runtime.getRuntime().availableProcessors();
     protected List<Map<Integer, Integer>> orders;
     protected List<Map<Integer, Integer>> aisles;
     protected int nItems;
     protected int waveSizeLB;
     protected int waveSizeUB;
+    private boolean isSa = false;
 
     public ChallengeSolver(
             List<Map<Integer, Integer>> orders, List<Map<Integer, Integer>> aisles, int nItems, int waveSizeLB, int waveSizeUB) {
@@ -40,13 +41,14 @@ public class ChallengeSolver {
     public ChallengeSolution solve(StopWatch stopWatch) {
         // Create a ForkJoinPool to manage all parallel operations
         ForkJoinPool customThreadPool = new ForkJoinPool(NUM_THREADS);
+        isSa = false;
 
         try {
             final int populationSize = 100;
             final int maxIterations = Integer.MAX_VALUE;
 
             // Run the genetic algorithm in the custom thread pool
-            Individual GaIndividual = customThreadPool.submit(() ->
+            /*Individual GaIndividual = customThreadPool.submit(() ->
                     geneticAlgorithmWithImprovedSelection(populationSize, maxIterations,stopWatch)
             ).get(); // This blocks until the result is available
 
@@ -56,6 +58,24 @@ public class ChallengeSolver {
 
             if(GaIndividual != null) {
                 System.out.println(" Score GA:" + GaIndividual.fitness);
+            }
+
+            // Force all parallel streams to complete by shutting down the pool
+            //customThreadPool.shutdown();
+            stopWatch.reset();*/
+            isSa = true;
+            // Run the genetic algorithm in the custom thread pool
+            Individual GaSaIndividual = customThreadPool.submit(() ->
+                    geneticAlgorithmWithImprovedSelection(populationSize, maxIterations,stopWatch)
+            ).get(); // This blocks until the result is available
+
+            // Apply post-processing steps sequentially
+            GaSaIndividual = removeUnusedAisles(GaSaIndividual);
+            GaSaIndividual = addOrdersWithoutNewAisles(GaSaIndividual);
+
+            if(GaSaIndividual != null) {
+                System.out.println(" Score GA com SA:" + GaSaIndividual.fitness);
+                System.out.println(" Is feasible:" + isSolutionFeasible(decodeIndividual(GaSaIndividual)));
             }
 
             // Force all parallel streams to complete by shutting down the pool
@@ -70,7 +90,7 @@ public class ChallengeSolver {
             }
 
             // Now that all threads are complete, return the solution
-            return decodeIndividual(GaIndividual);
+            return decodeIndividual(GaSaIndividual);
         }
         catch (Exception e) {
             System.err.println("Error in GA: " + e.getMessage());
@@ -239,7 +259,12 @@ public class ChallengeSolver {
 
         ChallengeSolution atual = new ChallengeSolution(selectedOrders, selectedAisles);
         Individual child = new Individual(childGenome, computeObjectiveFunction(atual));
-        improvedMutate(child);
+        if(!isSa){
+            improvedMutate(child);
+        } else {
+            improvedMutateSA(child);
+        }
+        
         return child;
     }
 
@@ -562,6 +587,37 @@ public class ChallengeSolver {
         }
     }
 
+    public void improvedMutateSA(Individual individual) {
+        Random rand = new Random();
+        double r = rand.nextDouble();
+
+        if (r < 0.1) {
+            // 10% chance: Traditional bit-flip mutation
+            int numMutations = Math.max(1, individual.genome.size() / 10);
+            Set<Integer> mutationPoints = new HashSet<>();
+
+            while (mutationPoints.size() < numMutations) {
+                mutationPoints.add(rand.nextInt(individual.genome.size()));
+            }
+
+            for (int mutationPoint : mutationPoints) {
+                individual.genome.set(mutationPoint, !individual.genome.get(mutationPoint));
+            }
+        }
+        else if (r < 0.4) {
+            // 30% chance: Remove some orders and their aisles
+            mutateRemovePercentageOfOrders(individual, 0.3); // Remove 30% of orders
+        }
+        else if (r < 0.7) {
+            // 30% chance: Just remove unused aisles
+            removeUnusedAisles(individual);
+        }
+        else {
+            // 30% chance: Add more orders without adding aisles
+            addOrdersWithoutNewAisles(individual);
+        }
+    }
+
     /*
      * Recieves an already sorted population
      * Returns a population of size n * 1.5
@@ -583,7 +639,27 @@ public class ChallengeSolver {
                 }
             }
         }
-        return newPopulation;
+
+       ArrayList<Individual> saPopulation = new ArrayList<>();
+
+        int populationSize = newPopulation.size();
+        int numToImprove = Math.max(1, (int) Math.round(populationSize * 0.1));
+
+        Collections.shuffle(newPopulation, new Random());
+
+        for (int i = 0; i < populationSize; i++) {
+            Individual individual = newPopulation.remove(0);
+
+            if (i < numToImprove) {
+                ChallengeSolution saImprove = simulatedAnnealing(decodeIndividual(individual), 100, 0.80);
+                updateGenome(individual, saImprove.orders(), saImprove.aisles());
+            }
+
+            saPopulation.add(individual);
+        }
+        return saPopulation;
+
+        //return newPopulation;
 
     }
 
@@ -1014,7 +1090,7 @@ public class ChallengeSolver {
         while (temperature > 1e-6) {
             ChallengeSolution neighbor = generateNeighbor(currentSolution, rand);
 
-            if (!isSASolutionFeasible(neighbor)) continue;
+            //if (!isSolutionFeasible(neighbor)) continue;
 
             double neighborValue = computeObjectiveFunction(neighbor);
             double delta = neighborValue - currentValue;
@@ -1107,5 +1183,100 @@ public class ChallengeSolver {
         }
 
         return newAisles;
+    }
+
+    private Set<Integer> selectAislesForOrder(int order, Set<Integer> selectedAisles,
+            Map<Integer, Integer> itemsLeftInAisles) {
+        Map<Integer, Integer> currentOrder = this.orders.get(order);
+
+        Set<Integer> possibleAisles = new HashSet<>(selectedAisles);
+
+        List<Integer> aisleIndexList = IntStream.range(0, aisles.size()).boxed().collect(Collectors.toList());
+
+        Collections.shuffle(aisleIndexList);
+
+        /*
+         * System.out.println("Aisle Index order: " + aisleIndexList);
+         */
+        if (canOrderFitInAisles(currentOrder, itemsLeftInAisles)) {
+            /*
+             * System.out.println("This order " + currentOrder +
+             * "fits in the current aisles: " + itemsLeftInAisles);
+             */
+            return possibleAisles;
+        }
+
+        /* System.out.println("Checking aisles for order " + order); */
+        for (int aisle : aisleIndexList) {
+            if (!possibleAisles.contains(aisle)) {
+
+                /* System.out.println("Adding aisle " + aisle + " to the possible aisles"); */
+
+                possibleAisles.add(aisle);
+
+                // Adds new offered items to itemsLeftInAisles
+                for (Map.Entry<Integer, Integer> entry : this.aisles.get(aisle).entrySet()) {
+                    int item = entry.getKey();
+                    int quantity = entry.getValue();
+                    itemsLeftInAisles.put(item, itemsLeftInAisles.getOrDefault(item, 0) + quantity);
+                }
+
+                /*
+                 * System.out.println("Items left in the aisles after adding aisle " + aisle +
+                 * ": " + itemsLeftInAisles);
+                 */
+
+                if (canOrderFitInAisles(currentOrder, itemsLeftInAisles)) {
+                    /*
+                     * System.out.println("After adding aisles, this order " + currentOrder +
+                     * "fits in the current aisles: " + itemsLeftInAisles);
+                     */
+                    return possibleAisles;
+                }
+            }
+        }
+
+        /* System.out.println("No more aisles can fit for order " + order); */
+
+        return Collections.emptySet();
+    }
+
+    private HashMap<Integer, Integer> getItemsLeftInAisles(Set<Integer> selectedOrders, Set<Integer> selectedAisles) {
+        ConcurrentMap<Integer, Integer> itemsLeftInAisles = new ConcurrentHashMap<>();
+
+        // Adds all aisles items to the itemsLeftInAisles
+        selectedAisles.parallelStream().forEach(aisle -> {
+            aisles.get(aisle).forEach((item, quantity) -> {
+                itemsLeftInAisles.merge(item, quantity, Integer::sum);
+            });
+        });
+
+        // Subtracts the items that were selected in the orders
+        selectedOrders.parallelStream().forEach(order -> {
+            orders.get(order).forEach((item, quantity) -> {
+                itemsLeftInAisles.merge(item, -quantity, Integer::sum);
+            });
+        });
+
+        /* System.out.println("Items left in the aisles: " + itemsLeftInAisles); */
+
+        return new HashMap<>(itemsLeftInAisles);
+    }
+
+    private boolean canOrderFitInAisles(Map<Integer, Integer> newOrder, Map<Integer, Integer> itemsLeftInAisles) {
+
+        for (Map.Entry<Integer, Integer> entry : newOrder.entrySet()) {
+            int item = entry.getKey();
+            int quantity = entry.getValue();
+            if (itemsLeftInAisles.getOrDefault(item, 0) < quantity) {
+                /*
+                 * System.out.println("Item " + item + " with quantity " + quantity +
+                 * " cannot fit in the aisles");
+                 */
+                return false;
+            }
+        }
+
+        return true;
     }
 }
