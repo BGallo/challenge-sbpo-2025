@@ -8,13 +8,19 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 public class ChallengeSolver {
     private final long MAX_RUNTIME = 60; // 1 minute
+    private final int nThreads = 4;
 
     protected List<Map<Integer, Integer>> orders;
     protected List<Map<Integer, Integer>> aisles;
@@ -31,31 +37,43 @@ public class ChallengeSolver {
         this.waveSizeUB = waveSizeUB;
     }
 
+    class AntResult {
+        ChallengeSolution solution;
+        double value;
+
+        public AntResult(ChallengeSolution solution, double value) {
+            this.solution = solution;
+            this.value = value;
+        }
+    }
+
     class Ant {
-        List<Integer> selectedAisles;
-        List<Integer> selectedOrders;
+        Set<Integer> selectedAisles;
+        Set<Integer> selectedOrders;
         List<Double> heuristicValues;
-        List<List<Integer>> aislesForThisOrder;
+        List<Set<Integer>> aislesForThisOrder;
         List<Double> probabilityForThisOrder;
         Double currentHeuristicValue;
         int currentIntervalIndex;
         int currentOrderIndex;
 
-        public Ant(List<Integer> selectedAisles, List<Integer> selectedOrders) {
+        public Ant(Set<Integer> selectedAisles, Set<Integer> selectedOrders) {
             this.selectedAisles = selectedAisles;
             this.selectedOrders = selectedOrders;
         }
 
-        public boolean chooseNextOrder(double[][] T, List<Integer> itemsPercentages, int alpha, int beta) {
+        public boolean chooseNextOrder(double[][] T, List<Double> itemsPercentages, int alpha, int beta) {
+            double epsilon = 0.10;
+            Random rng = new Random();
+
             int currentTotalItems = selectedOrders.stream()
                 .mapToInt(o -> orders.get(o).values().stream().mapToInt(Integer::intValue).sum())
                 .sum();
 
             int intervalIndex = 0;
             for (int i = 1; i < itemsPercentages.size(); i++) {
-                if (itemsPercentages.get(i) <= currentTotalItems) {
+                if (currentTotalItems < itemsPercentages.get(i)) {
                     intervalIndex = i-1;
-                } else {
                     break;
                 }
             }
@@ -68,18 +86,37 @@ public class ChallengeSolver {
                 return false; 
             }
 
-            double r = Math.random() * totalProbability;
+            //Explorer Ant
+            if (rng.nextDouble() < epsilon) {
 
-            double cumulativeProbability = 0.0;
-            for (int i = 0; i < probabilityForThisOrder.size(); i++) {
-                cumulativeProbability += probabilityForThisOrder.get(i);
-                if (cumulativeProbability >= r) {
-                    selectedOrders.add(i);
-                    selectedAisles = aislesForThisOrder.get(i);
-                    currentHeuristicValue = heuristicValues.get(i);
-                    currentIntervalIndex = intervalIndex;
-                    currentOrderIndex = i;
-                    break;
+                List<Integer> candidates = IntStream.range(0, orders.size())
+                    .filter(i -> probabilityForThisOrder.get(i) > 0.0)
+                    .boxed()
+                    .collect(Collectors.toList());
+
+                int chosenIndex = candidates.get(rng.nextInt(candidates.size()));
+                selectedOrders.add(chosenIndex);
+                selectedAisles = aislesForThisOrder.get(chosenIndex);
+                currentHeuristicValue = heuristicValues.get(chosenIndex);
+                currentIntervalIndex = intervalIndex;
+                currentOrderIndex = chosenIndex;
+            
+            // Heuristic Ant
+            } else {
+
+                double r = rng.nextDouble() * totalProbability;
+
+                double cumulativeProbability = 0.0;
+                for (int i = 0; i < probabilityForThisOrder.size(); i++) {
+                    cumulativeProbability += probabilityForThisOrder.get(i);
+                    if (cumulativeProbability >= r) {
+                        selectedOrders.add(i);
+                        selectedAisles = aislesForThisOrder.get(i);
+                        currentHeuristicValue = heuristicValues.get(i);
+                        currentIntervalIndex = intervalIndex;
+                        currentOrderIndex = i;
+                        break;
+                    }
                 }
             }
 
@@ -109,7 +146,7 @@ public class ChallengeSolver {
                     continue;
                 }
 
-                List<Integer> candidateAisles = selectAislesForOrders(i);
+                Set<Integer> candidateAisles = selectAislesForOrders(i);
                 if (candidateAisles == null) {
                     heuristicValues.set(i, 0.0);
                     probabilityForThisOrder.set(i, 0.0);
@@ -129,20 +166,19 @@ public class ChallengeSolver {
             }
         }
 
-        public List<Integer> selectAislesForOrders(int candidateOrder) {
+        public Set<Integer> selectAislesForOrders(int candidateOrder) {
             List<Integer> candidateOrders = new ArrayList<>(selectedOrders);
             candidateOrders.add(candidateOrder);
 
-            List<Integer> candidateAisles = new ArrayList<>(selectedAisles);
+            HashSet<Integer> candidateAisles = new HashSet<>(selectedAisles);
 
             List<Integer> possibleAisles = IntStream.range(0, aisles.size())
-                .filter(i -> !selectedAisles.contains(i))
+                .filter(i -> !candidateAisles.contains(i))
                 .boxed()
                 .collect(Collectors.toList());
 
             for (int i = 0; i < nItems; i++) {
                 final int index = i;
-                possibleAisles.removeAll(candidateAisles);
 
                 int itensNeeded = candidateOrders.stream()
                     .mapToInt(order -> orders.get(order).getOrDefault(index, 0))
@@ -159,18 +195,21 @@ public class ChallengeSolver {
                 int diff = itensNeeded - itensAvailable;
 
                 if (diff > 0) {
-                   possibleAisles.sort((a1, a2) -> aisles.get(a2).getOrDefault(index, 0) - aisles.get(a1).getOrDefault(index, 0));
+                    int possibleAislesSize = possibleAisles.size();
 
-                   for (int aisle : possibleAisles) {
-                       int available = aisles.get(aisle).getOrDefault(i, 0);
-                       if (available > 0) {
-                           candidateAisles.add(aisle);
-                           diff -= available;
-                           if (diff <= 0) {
-                               break;
-                           }
-                       }
-                   }
+                    for (int j = 0; j < possibleAislesSize; j++) {
+                        int aisle = possibleAisles.get((int) (Math.random() * possibleAislesSize));
+                        int available = aisles.get(aisle).getOrDefault(i, 0);
+                        if (available > 0) {
+                            candidateAisles.add(aisle);
+                            possibleAisles.remove((Integer) aisle);
+                            possibleAislesSize--;
+                            diff -= available;
+                            if (diff <= 0) {
+                                break;
+                            }
+                        }
+                    }
                 }
 
                 if (diff > 0) {
@@ -189,11 +228,12 @@ public class ChallengeSolver {
             if (currentHeuristicValue == null) {
                 return;
             }
-            T[currentIntervalIndex][currentOrderIndex] += q * currentHeuristicValue;
+            int numberOfPaths = T[currentIntervalIndex].length;
+            T[currentIntervalIndex][currentOrderIndex] += Math.min(10 * q * numberOfPaths, q * currentHeuristicValue);
         }
     }
 
-    public ChallengeSolution solve(StopWatch stopWatch) {
+    public ChallengeSolution solve(StopWatch stopWatch) throws InterruptedException, ExecutionException {
         ChallengeSolution bestSolution = null;
         Double bestValue = Double.NEGATIVE_INFINITY;
 
@@ -202,13 +242,14 @@ public class ChallengeSolver {
                 .sum();
 
         int antNumber = 20;
+        int antsPerThread = antNumber / nThreads;
         int alpha = 1;
         int beta = 2;
-        double evaporationRate = 0.1;
-        Double q = totalItems / 20.0;
+        double evaporationRate = 0.5;
+        Double q = 1.0;
 
-        List<Integer> itemPercentages = IntStream.range(0, 20)
-            .map(i -> (int) Math.round(totalItems * i / 20.0))
+        List<Double> itemPercentages = IntStream.range(0, 20)
+            .mapToDouble(i -> totalItems * i / 20.0)
             .boxed()
             .collect(Collectors.toList());
 
@@ -222,23 +263,50 @@ public class ChallengeSolver {
             }
         }
 
+        ExecutorService executor = Executors.newFixedThreadPool(nThreads);
+
         int iteration = 0;
+        int nIterationsWithoutImprovement = 0;
         while (stopWatch.getTime(TimeUnit.SECONDS) < MAX_RUNTIME - 1) {
+            List<Future<AntResult>> futures = new ArrayList<>();
+
             iteration++;
+            nIterationsWithoutImprovement++;
+
             List<Ant> ants = initAnts(antNumber);
+            
+            for (int t = 0; t < nThreads; t++) {
+                final int start = t * antsPerThread;
+                final int end = (t == nThreads - 1) ? ants.size() : start + antsPerThread;
 
-            for (Ant ant : ants) {
-                while (ant.chooseNextOrder(T, itemPercentages, alpha, beta)) { }
+                futures.add(executor.submit(() -> {
+                    AntResult localBest = null;
 
-                if (ant.currentHeuristicValue != null && ant.currentHeuristicValue > bestValue) {
-                    bestValue = ant.currentHeuristicValue;
-                    bestSolution = ant.getCurrentSolution();
+                    for (int i = start; i < end; i++) {
+                        Ant ant = ants.get(i);
+                        while (ant.chooseNextOrder(T, itemPercentages, alpha, beta)) { }
+
+                        if (localBest == null || ant.currentHeuristicValue > localBest.value) {
+                            localBest = new AntResult(ant.getCurrentSolution(), ant.currentHeuristicValue);
+                        }
+                    }
+
+                    return localBest;
+                }));
+            }
+
+            for (Future<AntResult> f : futures) {
+                AntResult r = f.get();
+                if (r != null && (bestSolution == null || r.value > bestValue)) {
+                    bestSolution = r.solution;
+                    bestValue = r.value;
+                    nIterationsWithoutImprovement = 0;
                 }
             }
 
             for (int i = 0; i < nIntervals; i++) {
                 for (int j = 0; j < orders.size(); j++) {
-                    T[i][j] = (1 - evaporationRate) * T[i][j];
+                    T[i][j] = Math.max(1.0, (1 - evaporationRate) * T[i][j]);
                 }
             }
 
@@ -246,18 +314,34 @@ public class ChallengeSolver {
                 ant.updatePheromones(T, q);
             }
 
+            if (nIterationsWithoutImprovement >= 10) {
+                rainEvent(T);
+            }
+
             System.out.println("Current Best Value for iteration " + iteration + ": " + bestValue);
         }
 
+        System.out.println("Is Solution Feasible? " + isSolutionFeasible(bestSolution));
+
+        executor.shutdown();
+
         return bestSolution;
+    }
+
+    private void rainEvent(double[][] T) {
+        for (int i = 0; i < T.length; i++) {
+            for (int j = 0; j < T[i].length; j++) {
+                T[i][j] = Math.max(1.0, T[i][j] * 0.5);
+            }
+        }
     }
 
     private List<Ant> initAnts(int antNumber) {
         List<Ant> ants = new ArrayList<>();
         for (int k = 0; k < antNumber; k++) {
 
-            List<Integer> initialSelectedOrders = new ArrayList<>();
-            List<Integer> initialSelectedAisles = new ArrayList<>();
+            HashSet<Integer> initialSelectedOrders = new HashSet<>();
+            HashSet<Integer> initialSelectedAisles = new HashSet<>();
 
             Ant ant = new Ant(initialSelectedAisles, initialSelectedOrders);
 
@@ -265,7 +349,7 @@ public class ChallengeSolver {
             ant.probabilityForThisOrder = new ArrayList<>(Collections.nCopies(orders.size(), 0.0));
             ant.aislesForThisOrder = new ArrayList<>();
             for (int i = 0; i < orders.size(); i++) {
-                ant.aislesForThisOrder.add(new ArrayList<>());
+                ant.aislesForThisOrder.add(new HashSet<>());
             }
 
             ants.add(ant);
