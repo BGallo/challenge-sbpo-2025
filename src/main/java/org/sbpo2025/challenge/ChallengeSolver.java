@@ -3,13 +3,12 @@ package org.sbpo2025.challenge;
 import org.apache.commons.lang3.time.StopWatch;
 
 import java.util.*;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 public class ChallengeSolver {
-    private final long MAX_RUNTIME = 540000; // milliseconds; 5 s
+    private final long MAX_RUNTIME = 60000; // milliseconds; 5 s
     private final int NUM_THREADS = Runtime.getRuntime().availableProcessors();
     protected List<Map<Integer, Integer>> orders;
     protected List<Map<Integer, Integer>> aisles;
@@ -42,7 +41,7 @@ public class ChallengeSolver {
         ForkJoinPool customThreadPool = new ForkJoinPool(NUM_THREADS);
 
         try {
-            final int populationSize = 100;
+            final int populationSize = 20;
             final int maxIterations = Integer.MAX_VALUE;
 
             // Run the genetic algorithm in the custom thread pool
@@ -51,12 +50,13 @@ public class ChallengeSolver {
             ).get(); // This blocks until the result is available
 
             // Apply post-processing steps sequentially
-            GaIndividual = removeUnusedAisles(GaIndividual);
-            GaIndividual = addOrdersWithoutNewAisles(GaIndividual);
+            GaIndividual = removeUnusedAisles(GaIndividual,stopWatch);
+            GaIndividual = addOrdersWithoutNewAislesSimplified(GaIndividual,stopWatch);
 
             if(GaIndividual != null) {
                 System.out.println(" Score GA:" + GaIndividual.fitness);
             }
+            System.out.println("Tempo total:" + stopWatch.getTime(TimeUnit.SECONDS));
 
             // Force all parallel streams to complete by shutting down the pool
             customThreadPool.shutdown();
@@ -141,6 +141,79 @@ public class ChallengeSolver {
         return population;
     }
 
+    public ArrayList<Individual> generateFastInitialPopulation(int size) {
+        ArrayList<Individual> population = new ArrayList<>();
+        Random rand = new Random();
+
+        List<Integer> orderIndexes = new ArrayList<>();
+        for (int i = 0; i < orders.size(); i++) {
+            orderIndexes.add(i);
+        }
+
+        for (int i = 0; i < size; i++) {
+            ArrayList<Boolean> genome = new ArrayList<>(Collections.nCopies(orders.size() + aisles.size(), false));
+            int pickedUnits = 0;
+
+            // Marca todos os corredores como ativos
+            for (int aisleIndex = 0; aisleIndex < aisles.size(); aisleIndex++) {
+                genome.set(orders.size() + aisleIndex, true);
+            }
+
+            // Calcula estoque total disponível (somando todos corredores)
+            Map<Integer, Integer> availableItems = new HashMap<>();
+            for (int aisleIndex = 0; aisleIndex < aisles.size(); aisleIndex++) {
+                Map<Integer, Integer> aisle = aisles.get(aisleIndex);
+                for (Map.Entry<Integer, Integer> entry : aisle.entrySet()) {
+                    int item = entry.getKey();
+                    int qty = entry.getValue();
+                    availableItems.put(item, availableItems.getOrDefault(item, 0) + qty);
+                }
+            }
+
+            // Copia da lista de pedidos e embaralha
+            List<Integer> localOrderIndexes = new ArrayList<>(orderIndexes);
+            Collections.shuffle(localOrderIndexes, rand);
+
+            // Vai tentando adicionar pedidos
+            for (int orderIndex : localOrderIndexes) {
+                Map<Integer, Integer> order = orders.get(orderIndex);
+                int orderUnitsSum = order.values().stream().mapToInt(Integer::intValue).sum();
+
+                if (pickedUnits + orderUnitsSum > waveSizeUB) {
+                    continue; // não cabe mais
+                }
+
+                // Checa se todos os itens existem nos corredores disponíveis
+                boolean canAdd = true;
+                for (Map.Entry<Integer, Integer> entry : order.entrySet()) {
+                    int item = entry.getKey();
+                    int needed = entry.getValue();
+                    if (availableItems.getOrDefault(item, 0) < needed) {
+                        canAdd = false;
+                        break;
+                    }
+                }
+
+                if (canAdd) {
+                    // Desconta os itens usados
+                    for (Map.Entry<Integer, Integer> entry : order.entrySet()) {
+                        int item = entry.getKey();
+                        int needed = entry.getValue();
+                        availableItems.put(item, availableItems.get(item) - needed);
+                    }
+                    // Marca o pedido no genoma
+                    genome.set(orderIndex, true);
+                    pickedUnits += orderUnitsSum;
+                }
+            }
+
+            population.add(new Individual(genome, -1));
+        }
+
+        return population;
+    }
+
+
     public ChallengeSolution decodeIndividual(Individual individual) {
         Set<Integer> selectedOrders = new HashSet<>();
         Set<Integer> selectedAisles = new HashSet<>();
@@ -161,7 +234,7 @@ public class ChallengeSolver {
     }
 
 
-    public Individual crossover(Individual parent1, Individual parent2) {
+    public Individual crossover(Individual parent1, Individual parent2, StopWatch stopWatch) {
         Random rand = new Random();
         ArrayList<Boolean> childGenome = new ArrayList<>(Collections.nCopies(orders.size() + aisles.size(), false));
         Set<Integer> selectedOrders = new HashSet<>();
@@ -239,7 +312,7 @@ public class ChallengeSolver {
 
         ChallengeSolution atual = new ChallengeSolution(selectedOrders, selectedAisles);
         Individual child = new Individual(childGenome, computeObjectiveFunction(atual));
-        improvedMutate(child);
+        improvedMutate(child, stopWatch);
         return child;
     }
 
@@ -250,8 +323,8 @@ public class ChallengeSolver {
      * @param percentToRemove Percentage of orders to remove (0.0 to 1.0)
      * @return Mutated individual
      */
-    public Individual mutateRemovePercentageOfOrders(Individual individual, double percentToRemove) {
-        if (new Random().nextDouble() > 0.3) return individual; // Apply mutation with 30% probability
+    public Individual mutateRemovePercentageOfOrders(Individual individual, double percentToRemove, StopWatch stopWatch) {
+        //if (new Random().nextDouble() > 0.3) return individual; // Apply mutation with 30% probability
 
         ChallengeSolution solution = decodeIndividual(individual);
         Set<Integer> selectedOrders = new HashSet<>(solution.orders());
@@ -265,25 +338,24 @@ public class ChallengeSolver {
         List<Integer> ordersList = new ArrayList<>(selectedOrders);
         Collections.shuffle(ordersList);
         Set<Integer> ordersToKeep = new HashSet<>(ordersList.subList(ordersToRemove, ordersList.size()));
-
+        //System.out.println("iniciando remove: " + stopWatch.getTime(TimeUnit.SECONDS));
         // Create a new solution with only the orders to keep
-        Set<Integer> newAisles = findMinimumRequiredAisles(ordersToKeep);
+        Set<Integer> newAisles = findMinimumRequiredAisles(ordersToKeep, stopWatch);
 
         // Update individual's genome
         updateGenome(individual, ordersToKeep, newAisles);
-
+        //System.out.println("fim remove: " + stopWatch.getTime(TimeUnit.SECONDS));
         // Try to add more orders without adding new aisles
-        return addOrdersWithoutNewAisles(individual);
+        return individual;
     }
 
     /**
      * Find the minimum set of aisles required to fulfill the given orders.
      * Uses parallelism for performance with large datasets.
-     */
-    private Set<Integer> findMinimumRequiredAisles(Set<Integer> orderSet) {
-        // First identify all items required by the orders
-        Map<Integer, Integer> requiredItems = new ConcurrentHashMap<>();
-
+          */
+        private Set<Integer> findMinimumRequiredAisles(Set<Integer> orderSet, StopWatch stopWatch) {
+             // First identify all items required by the orders
+             Map<Integer, Integer> requiredItems = new ConcurrentHashMap<>();
         orderSet.parallelStream().forEach(orderIndex -> {
             Map<Integer, Integer> order = orders.get(orderIndex);
             synchronized(requiredItems) {
@@ -296,7 +368,7 @@ public class ChallengeSolver {
         Map<Integer, List<AisleQuantity>> itemToAislesMap = createItemToAislesMap();
 
         // Find the minimum set of aisles to satisfy all required items
-        return findMinimumAisleSet(requiredItems, itemToAislesMap);
+        return findMinimumAisleSet(requiredItems, itemToAislesMap, stopWatch);
     }
 
     /**
@@ -335,11 +407,11 @@ public class ChallengeSolver {
     /**
      * Finds the minimum set of aisles needed to fulfill all required items.
      * Uses a greedy approach that prioritizes aisles with the most needed items.
-     */
-    private Set<Integer> findMinimumAisleSet(Map<Integer, Integer> requiredItems,
-                                             Map<Integer, List<AisleQuantity>> itemToAislesMap) {
-        Set<Integer> selectedAisles = new HashSet<>();
-        Map<Integer, Integer> remainingNeeded = new HashMap<>(requiredItems);
+          */
+         private Set<Integer> findMinimumAisleSet(Map<Integer, Integer> requiredItems,
+                                                  Map<Integer, List<AisleQuantity>> itemToAislesMap, StopWatch stopWatch) {
+             Set<Integer> selectedAisles = new HashSet<>();
+             Map<Integer, Integer> remainingNeeded = new HashMap<>(requiredItems);
 
         // Continue until all items are fulfilled
         while (!remainingNeeded.isEmpty()) {
@@ -416,14 +488,14 @@ public class ChallengeSolver {
     /**
      * Removes unnecessary aisles without removing any orders.
      * @param individual The individual to optimize
-     * @return Optimized individual
-     */
-    public Individual removeUnusedAisles(Individual individual) {
-        ChallengeSolution solution = decodeIndividual(individual);
-        Set<Integer> selectedOrders = new HashSet<>(solution.orders());
-
-        // Find minimum required aisles for current orders
-        Set<Integer> minimalAisles = findMinimumRequiredAisles(selectedOrders);
+          * @return Optimized individual
+          */
+         public Individual removeUnusedAisles(Individual individual, StopWatch stopWatch) {
+             ChallengeSolution solution = decodeIndividual(individual);
+             Set<Integer> selectedOrders = new HashSet<>(solution.orders());
+     
+             // Find minimum required aisles for current orders
+             Set<Integer> minimalAisles = findMinimumRequiredAisles(selectedOrders,stopWatch);
 
         // Update genome with optimized aisles
         updateGenome(individual, selectedOrders, minimalAisles);
@@ -434,13 +506,13 @@ public class ChallengeSolver {
     /**
      * Adds as many new orders as possible without adding new aisles.
      * @param individual The individual to enhance
-     * @return Enhanced individual
-     */
-    public Individual addOrdersWithoutNewAisles(Individual individual) {
-        ChallengeSolution solution = decodeIndividual(individual);
-        Set<Integer> selectedOrders = new HashSet<>(solution.orders());
-        Set<Integer> selectedAisles = new HashSet<>(solution.aisles());
-
+          * @return Enhanced individual
+          */
+         public Individual addOrdersWithoutNewAisles(Individual individual, StopWatch stopWatch) {
+             ChallengeSolution solution = decodeIndividual(individual);
+             Set<Integer> selectedOrders = new HashSet<>(solution.orders());
+             Set<Integer> selectedAisles = new HashSet<>(solution.aisles());
+             System.out.println("iniciando add: " + stopWatch.getTime(TimeUnit.SECONDS));
         // Calculate currently used items and total units
         Map<Integer, Integer> usedItems = new ConcurrentHashMap<>();
         final int[] totalUnits = {0}; // Array to allow modification in lambda
@@ -523,18 +595,115 @@ public class ChallengeSolver {
 
         // Update the individual
         updateGenome(individual, selectedOrders, selectedAisles);
+        System.out.println("fim add: " + stopWatch.getTime(TimeUnit.SECONDS));
 
         return individual;
     }
+
+    public Individual addOrdersWithoutNewAislesSimplified(Individual individual, StopWatch stopWatch) {
+        ChallengeSolution solution = decodeIndividual(individual);
+        Set<Integer> selectedOrders = new HashSet<>(solution.orders());
+        Set<Integer> selectedAisles = new HashSet<>(solution.aisles());
+        //System.out.println("iniciando add: " + stopWatch.getTime(TimeUnit.SECONDS));
+
+        // Calculate currently used items and total units
+        Map<Integer, Integer> usedItems = new HashMap<>();
+        int totalUnits = 0;
+
+        for (int orderIndex : selectedOrders) {
+            Map<Integer, Integer> order = orders.get(orderIndex);
+            for (Map.Entry<Integer, Integer> entry : order.entrySet()) {
+                usedItems.put(entry.getKey(),
+                        usedItems.getOrDefault(entry.getKey(), 0) + entry.getValue());
+                totalUnits += entry.getValue();
+            }
+        }
+        ///System.out.println("calculado qtde de itens pedidos: " + stopWatch.getTime(TimeUnit.SECONDS));
+        // Calculate available items from selected aisles
+        Map<Integer, Integer> availableItems = new HashMap<>();
+        for (int aisleIndex : selectedAisles) {
+            Map<Integer, Integer> aisle = aisles.get(aisleIndex);
+            for (Map.Entry<Integer, Integer> entry : aisle.entrySet()) {
+                availableItems.put(entry.getKey(),
+                        availableItems.getOrDefault(entry.getKey(), 0) + entry.getValue());
+            }
+        }
+        //System.out.println("calculado qtde de itens disponiveis nos corredores: " + stopWatch.getTime(TimeUnit.SECONDS));
+        // Subtract used items to get remaining availability
+        for (Map.Entry<Integer, Integer> entry : usedItems.entrySet()) {
+            availableItems.put(entry.getKey(),
+                    availableItems.getOrDefault(entry.getKey(), 0) - entry.getValue());
+        }
+        //System.out.println("calculado qtde de itens ainda disponiveis: " + stopWatch.getTime(TimeUnit.SECONDS));
+        // Find candidate orders
+        List<Integer> candidateOrders = IntStream.range(0, orders.size())
+                .filter(i -> !selectedOrders.contains(i))
+                .boxed()
+                .collect(Collectors.toList());
+
+        // Shuffle to avoid bias
+        Collections.shuffle(candidateOrders);
+
+        // Try to add orders that can be fulfilled with current resources
+        boolean added = true;
+        while (added && totalUnits < waveSizeUB) {
+            added = false;
+
+            for (Iterator<Integer> it = candidateOrders.iterator(); it.hasNext();) {
+                int orderIndex = it.next();
+                Map<Integer, Integer> order = orders.get(orderIndex);
+
+                // Check if order can be fulfilled com os itens disponíveis
+                boolean canAdd = true;
+                int orderSize = 0;
+
+                for (Map.Entry<Integer, Integer> entry : order.entrySet()) {
+                    int item = entry.getKey();
+                    int needed = entry.getValue();
+                    orderSize += needed;
+
+                    if (availableItems.getOrDefault(item, 0) < needed) {
+                        canAdd = false;
+                        break;
+                    }
+                }
+
+                // Se pode adicionar e respeita waveSizeUB
+                if (canAdd && totalUnits + orderSize <= waveSizeUB) {
+                    // Atualiza diretamente os availableItems sem copiar
+                    for (Map.Entry<Integer, Integer> entry : order.entrySet()) {
+                        int item = entry.getKey();
+                        int needed = entry.getValue();
+                        availableItems.put(item, availableItems.get(item) - needed);
+                    }
+
+                    selectedOrders.add(orderIndex);
+                    totalUnits += orderSize;
+                    it.remove();
+                    added = true;
+
+                    // Opcional: break se você quiser adicionar um por vez e depois recomeçar
+                    // break;
+                }
+            }
+        }
+
+        // Update the individual
+        updateGenome(individual, selectedOrders, selectedAisles);
+        //System.out.println("fim add: " + stopWatch.getTime(TimeUnit.SECONDS));
+
+        return individual;
+    }
+
 
     /**
      * An improved mutation method that combines different mutation strategies
      * to avoid local maxima in the search space.
      */
-    public void improvedMutate(Individual individual) {
+    public void improvedMutate(Individual individual, StopWatch stopWatch) {
         Random rand = new Random();
         double r = rand.nextDouble();
-
+        //System.out.println("começo mutação: " + stopWatch.getTime(TimeUnit.SECONDS));
         if (r < 0.1) {
             // 10% chance: Traditional bit-flip mutation
             int numMutations = Math.max(1, individual.genome.size() / 10);
@@ -550,15 +719,15 @@ public class ChallengeSolver {
         }
         else if (r < 0.4) {
             // 30% chance: Remove some orders and their aisles
-            mutateRemovePercentageOfOrders(individual, 0.3); // Remove 30% of orders
+            mutateRemovePercentageOfOrders(individual, 0.3, stopWatch); // Remove 30% of orders
         }
         else if (r < 0.7) {
             // 30% chance: Just remove unused aisles
-            removeUnusedAisles(individual);
+            removeUnusedAisles(individual, stopWatch);
         }
         else {
             // 30% chance: Add more orders without adding aisles
-            addOrdersWithoutNewAisles(individual);
+            addOrdersWithoutNewAislesSimplified(individual,stopWatch);
         }
     }
 
@@ -566,7 +735,7 @@ public class ChallengeSolver {
      * Recieves an already sorted population
      * Returns a population of size n * 1.5
      */
-    public ArrayList<Individual> crossOverPopulation(ArrayList<Individual> population) {
+    public ArrayList<Individual> crossOverPopulation(ArrayList<Individual> population, StopWatch stopWatch) {
         ArrayList<Individual> newPopulation = new ArrayList<>();
         Random rand = new Random();
         while (!population.isEmpty()) {
@@ -579,7 +748,7 @@ public class ChallengeSolver {
                 if (rand.nextDouble() < 0.5 || i == population.size() - 1) {
                     parent2 = population.remove(i);
                     newPopulation.add(parent2);
-                    newPopulation.add(crossover(parent1, parent2));
+                    newPopulation.add(crossover(parent1, parent2, stopWatch));
                 }
             }
         }
@@ -661,6 +830,8 @@ public class ChallengeSolver {
         Individual bestIndividual = population.get(0);
         double bestFitness = bestIndividual.fitness;
 
+        System.out.println("tempo de geração da população incial: " + stopWatch.getTime(TimeUnit.SECONDS));
+        System.out.println("melhor fitness inicial: " + bestFitness);
         // Track average diversity for adaptive selection
         double averageDiversity = 0.0;
         int diversityMeasurements = 0;
@@ -668,11 +839,12 @@ public class ChallengeSolver {
         // Main loop
 
         int iterationsWithoutImprovement = 0;
+        int iterations = 0;
 
         while (stopWatch.getDuration().toMillis() < MAX_RUNTIME) {
 
             // Crossover
-            population = crossOverPopulation(population);
+            population = crossOverPopulation(population, stopWatch);
 
             // Evaluate new population
             population.parallelStream().forEach(individual -> {
@@ -703,8 +875,9 @@ public class ChallengeSolver {
             } else {
                 iterationsWithoutImprovement++;
             }
+            iterations++;
         }
-
+        System.out.println("número de iterações: " + iterations);
         return bestIndividual;
     }
 
