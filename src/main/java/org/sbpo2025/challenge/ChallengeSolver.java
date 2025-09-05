@@ -43,6 +43,7 @@ public class ChallengeSolver {
         double greedyQuality = computeObjectiveFunction(greedySolution);
         System.out.println("greedy Solution with quality: " + greedyQuality);
         System.out.println("is Feasible: " + isSolutionFeasible(greedySolution));
+        System.out.println("tempo gasto: " + stopWatch.getTime(TimeUnit.SECONDS));
         ChallengeSolution SASolution = simulatedAnnealing(greedySolution,100,0.80);
         double SAQuality = computeObjectiveFunction(SASolution);
         System.out.println("Simulated Annealing Solution with quality: " + SAQuality);
@@ -54,6 +55,9 @@ public class ChallengeSolver {
     private ChallengeSolution constructPureGreedySolution() {
         Set<Integer> selectedOrders = new HashSet<>();
         Set<Integer> selectedAisles = new HashSet<>();
+        for (int i = 0; i < aisles.size(); i++) {
+            selectedAisles.add(i);
+        }
 
         Map<Integer, Integer> orderItemCount = new HashMap<>();
         for (int i = 0; i < orders.size(); i++) {
@@ -64,6 +68,13 @@ public class ChallengeSolver {
         List<Integer> candidateOrders = new ArrayList<>(orderItemCount.keySet());
         candidateOrders.sort((o1, o2) -> Integer.compare(orderItemCount.get(o2), orderItemCount.get(o1)));
 
+        Map<Integer, Integer> availableItems = new HashMap<>();
+        for (Map<Integer, Integer> aisle : aisles) {
+            for (Map.Entry<Integer, Integer> entry : aisle.entrySet()) {
+                availableItems.merge(entry.getKey(), entry.getValue(), Integer::sum);
+            }
+        }
+
         int totalSelectedItems = 0;
 
         for (int order : candidateOrders) {
@@ -73,17 +84,27 @@ public class ChallengeSolver {
                 continue;
             }
 
-            HashMap<Integer, Integer> itemsLeftInAisles = getItemsLeftInAisles(selectedOrders, selectedAisles);
-
-            Set<Integer> orderAisles = selectAislesForOrder(order, selectedAisles, itemsLeftInAisles);
-
-            if (orderAisles.isEmpty()) {
-                continue;
+            Map<Integer, Integer> orderMap = orders.get(order);
+            boolean canAdd = true;
+            for (Map.Entry<Integer, Integer> entry : orderMap.entrySet()) {
+                int item = entry.getKey();
+                int needed = entry.getValue();
+                if (availableItems.getOrDefault(item, 0) < needed) {
+                    canAdd = false;
+                    break;
+                }
             }
 
-            selectedOrders.add(order);
-            selectedAisles.addAll(orderAisles);
-            totalSelectedItems += orderItems;
+            if (canAdd) {
+                for (Map.Entry<Integer, Integer> entry : orderMap.entrySet()) {
+                    int item = entry.getKey();
+                    int needed = entry.getValue();
+                    availableItems.put(item, availableItems.get(item) - needed);
+                }
+
+                selectedOrders.add(order);
+                totalSelectedItems += orderItems;
+            }
         }
 
         return new ChallengeSolution(selectedOrders, selectedAisles);
@@ -105,6 +126,8 @@ public class ChallengeSolver {
         double temperature = initialTemperature;
 
         long startTime = System.currentTimeMillis();
+
+        int iterations = 0;
 
         while (System.currentTimeMillis() - startTime < MAX_RUNTIME) {
             ChallengeSolution neighbor = generateNeighbor(currentSolution, rand);
@@ -131,8 +154,9 @@ public class ChallengeSolver {
             }
 
             temperature *= coolingRate;
+            iterations++;
         }
-
+        System.out.println("número de iterações: " + iterations);
         return bestSolution;
     }
 
