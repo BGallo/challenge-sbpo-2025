@@ -1,6 +1,7 @@
 package org.sbpo2025.challenge;
 
 import org.apache.commons.lang3.time.StopWatch;
+import org.apache.commons.lang3.tuple.Pair;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -54,16 +55,16 @@ public class ChallengeSolver {
         List<Set<Integer>> aislesForThisOrder;
         List<Double> probabilityForThisOrder;
         Double currentHeuristicValue;
-        int currentIntervalIndex;
-        int currentOrderIndex;
+        Double epsilon;
+        List<Pair<Integer, Integer>> chosenOrders = new ArrayList<>();
 
-        public Ant(Set<Integer> selectedAisles, Set<Integer> selectedOrders) {
+        public Ant(Set<Integer> selectedAisles, Set<Integer> selectedOrders, Double epsilon) {
             this.selectedAisles = selectedAisles;
             this.selectedOrders = selectedOrders;
+            this.epsilon = epsilon;
         }
 
-        public boolean chooseNextOrder(double[][] T, List<Double> itemsPercentages, int alpha, int beta) {
-            double epsilon = 0.10;
+        public boolean chooseNextOrder(double[][] T, List<Double> itemsPercentages, double alpha, double beta) {
             Random rng = new Random();
 
             int currentTotalItems = selectedOrders.stream()
@@ -86,7 +87,7 @@ public class ChallengeSolver {
                 return false; 
             }
 
-            //Explorer Ant
+            //Explorer Decision
             if (rng.nextDouble() < epsilon) {
 
                 List<Integer> candidates = IntStream.range(0, orders.size())
@@ -98,8 +99,7 @@ public class ChallengeSolver {
                 selectedOrders.add(chosenIndex);
                 selectedAisles = aislesForThisOrder.get(chosenIndex);
                 currentHeuristicValue = heuristicValues.get(chosenIndex);
-                currentIntervalIndex = intervalIndex;
-                currentOrderIndex = chosenIndex;
+                chosenOrders.add(Pair.of(intervalIndex, chosenIndex));
             
             // Heuristic Ant
             } else {
@@ -113,8 +113,7 @@ public class ChallengeSolver {
                         selectedOrders.add(i);
                         selectedAisles = aislesForThisOrder.get(i);
                         currentHeuristicValue = heuristicValues.get(i);
-                        currentIntervalIndex = intervalIndex;
-                        currentOrderIndex = i;
+                        chosenOrders.add(Pair.of(intervalIndex, i));
                         break;
                     }
                 }
@@ -125,7 +124,7 @@ public class ChallengeSolver {
             return true;
         }
 
-        public void updateHeuristicValues(int itemIntervalIndex, double[][] T, int alpha, int beta) {
+        public void updateHeuristicValues(int itemIntervalIndex, double[][] T, double alpha, double beta) {
             for (int i = 0; i < orders.size(); i++) {
 
                 if (selectedOrders.contains(i)) {
@@ -228,12 +227,16 @@ public class ChallengeSolver {
             if (currentHeuristicValue == null) {
                 return;
             }
-            int numberOfPaths = T[currentIntervalIndex].length;
-            T[currentIntervalIndex][currentOrderIndex] += Math.min(10 * q * numberOfPaths, q * currentHeuristicValue);
+            int options = T[0].length;
+            for (Pair<Integer, Integer> p : chosenOrders) {
+                int intervalIndex = p.getLeft();
+                int orderIndex = p.getRight();
+                T[intervalIndex][orderIndex] += Math.min(options - 1, q);
+            }
         }
     }
 
-    public ChallengeSolution solve(StopWatch stopWatch) throws InterruptedException, ExecutionException {
+    public ChallengeSolution solve(StopWatch stopWatch, int antNumber, double alpha, double beta, double evaporationRate, double epsilon) throws InterruptedException, ExecutionException {
         ChallengeSolution bestSolution = null;
         Double bestValue = Double.NEGATIVE_INFINITY;
 
@@ -241,12 +244,13 @@ public class ChallengeSolver {
                 .mapToInt(order -> order.values().stream().mapToInt(Integer::intValue).sum())
                 .sum();
 
-        int antNumber = 20;
+        /* int antNumber = 20; */
         int antsPerThread = antNumber / nThreads;
-        int alpha = 1;
+        /* int alpha = 1;
         int beta = 2;
-        double evaporationRate = 0.5;
+        double evaporationRate = 0.5; */
         Double q = 1.0;
+        /* Double epsilon = 0.10; */
 
         List<Double> itemPercentages = IntStream.range(0, 20)
             .mapToDouble(i -> totalItems * i / 20.0)
@@ -273,8 +277,8 @@ public class ChallengeSolver {
             iteration++;
             nIterationsWithoutImprovement++;
 
-            List<Ant> ants = initAnts(antNumber);
-            
+            List<Ant> ants = initAnts(antNumber, epsilon);
+
             for (int t = 0; t < nThreads; t++) {
                 final int start = t * antsPerThread;
                 final int end = (t == nThreads - 1) ? ants.size() : start + antsPerThread;
@@ -316,12 +320,14 @@ public class ChallengeSolver {
 
             if (nIterationsWithoutImprovement >= 10) {
                 rainEvent(T);
+                nIterationsWithoutImprovement = 0;
             }
 
-            System.out.println("Current Best Value for iteration " + iteration + ": " + bestValue);
+            /* System.out.println("Iteration " + iteration + ": Best Value = " + bestValue + ", Time Elapsed = " + stopWatch.getTime(TimeUnit.SECONDS) + "s"); */
         }
 
-        System.out.println("Is Solution Feasible? " + isSolutionFeasible(bestSolution));
+        /* System.out.println("Is Solution Feasible? " + isSolutionFeasible(bestSolution)); */
+        System.out.println(bestValue);
 
         executor.shutdown();
 
@@ -336,14 +342,14 @@ public class ChallengeSolver {
         }
     }
 
-    private List<Ant> initAnts(int antNumber) {
+    private List<Ant> initAnts(int antNumber, Double epsilon) {
         List<Ant> ants = new ArrayList<>();
         for (int k = 0; k < antNumber; k++) {
 
             HashSet<Integer> initialSelectedOrders = new HashSet<>();
             HashSet<Integer> initialSelectedAisles = new HashSet<>();
 
-            Ant ant = new Ant(initialSelectedAisles, initialSelectedOrders);
+            Ant ant = new Ant(initialSelectedAisles, initialSelectedOrders, epsilon);
 
             ant.heuristicValues = new ArrayList<>(Collections.nCopies(orders.size(), 0.0));
             ant.probabilityForThisOrder = new ArrayList<>(Collections.nCopies(orders.size(), 0.0));

@@ -49,7 +49,7 @@ public class Challenge {
 
             reader.close();
         } catch (IOException e) {
-            System.err.println("Error reading input from " + inputFilePath);
+            /* System.err.println("Error reading input from " + inputFilePath); */
             e.printStackTrace();
         }
     }
@@ -72,7 +72,7 @@ public class Challenge {
 
     public void writeOutput(ChallengeSolution challengeSolution, String outputFilePath) {
         if (challengeSolution == null) {
-            System.err.println("Solution not found");
+            /* System.err.println("Solution not found"); */
             return;
         }
         try {
@@ -101,10 +101,10 @@ public class Challenge {
             }
 
             writer.close();
-            System.out.println("Output written to " + outputFilePath);
+            /* System.out.println("Output written to " + outputFilePath); */
 
         } catch (IOException e) {
-            System.err.println("Error writing output to " + outputFilePath);
+            /* System.err.println("Error writing output to " + outputFilePath); */
             e.printStackTrace();
         }
     }
@@ -113,16 +113,21 @@ public class Challenge {
         // Start the stopwatch to track the running time
         StopWatch stopWatch = StopWatch.createStarted();
 
-        if (args.length != 2) {
+ /*        if (args.length != 2) {
             System.out.println("Usage: java -jar target/ChallengeSBPO2025-1.0.jar <inputFilePath> <outputFilePath>");
             return;
-        }
+        } */
 
         Challenge challenge = new Challenge();
         challenge.readInput(args[0]);
+        int antNumber = Integer.parseInt(args[2]);
+        double alpha = Double.parseDouble(args[3]);
+        double beta = Double.parseDouble(args[4]);
+        double evaporationRate = Double.parseDouble(args[5]);
+        double epsilon = Double.parseDouble(args[6]);
         var challengeSolver = new ChallengeSolver(
                 challenge.orders, challenge.aisles, challenge.nItems, challenge.waveSizeLB, challenge.waveSizeUB);
-        ChallengeSolution challengeSolution = challengeSolver.solve(stopWatch);
+        ChallengeSolution challengeSolution = challengeSolver.solve(stopWatch, antNumber, alpha, beta, evaporationRate, epsilon);
 
         challenge.writeOutput(challengeSolution, args[1]);
     }
