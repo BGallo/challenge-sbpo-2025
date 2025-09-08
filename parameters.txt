@@ -1,0 +1,4 @@
+
+initialTemperature "--initialTemperature" i (50, 1000)
+coolingRate "--coolingRate" r (0.30, 0.99)
+
