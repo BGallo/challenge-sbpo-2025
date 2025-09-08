@@ -20,15 +20,12 @@ target.runner <- function(experiment, scenario) {
   
   results <- sapply(inst_list, function(inst) {
     cmd <- sprintf(
-      'java -Xmx4g -jar %s %s output.txt %d %f %f %f %f',
-      "/home/pedro/challenge-sbpo-2025/target/ChallengeSBPO2025-1.0.jar",
-      inst,
-      as.integer(cfg$antNumber),
-      as.numeric(cfg$alpha),
-      as.numeric(cfg$beta),
-      as.numeric(cfg$evaporationRate),
-      as.numeric(cfg$epsilon)
-    )
+    'java -Xmx4g -jar %s %s output.txt %f %f',
+    "/home/pedro/challenge-sbpo-2025/target/ChallengeSBPO2025-1.0.jar",
+    inst,
+    as.numeric(cfg$initialTemperature),
+    as.numeric(cfg$coolingRate)
+  )
     
     cat("Running command:", cmd, "\n")
     
