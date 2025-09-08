@@ -41,14 +41,14 @@ public class ChallengeSolver {
 
         ChallengeSolution greedySolution = constructPureGreedySolution();
         double greedyQuality = computeObjectiveFunction(greedySolution);
-        System.out.println("greedy Solution with quality: " + greedyQuality);
-        System.out.println("is Feasible: " + isSolutionFeasible(greedySolution));
-        System.out.println("tempo gasto: " + stopWatch.getTime(TimeUnit.SECONDS));
+        //System.out.println("greedy Solution with quality: " + greedyQuality);
+        //System.out.println("is Feasible: " + isSolutionFeasible(greedySolution));
+        //System.out.println("tempo gasto: " + stopWatch.getTime(TimeUnit.SECONDS));
         ChallengeSolution SASolution = simulatedAnnealing(greedySolution,100,0.80);
         double SAQuality = computeObjectiveFunction(SASolution);
-        System.out.println("Simulated Annealing Solution with quality: " + SAQuality);
-        System.out.println("is Feasible: " + isSolutionFeasible(SASolution));
-
+        //System.out.println("Simulated Annealing Solution with quality: " + SAQuality);
+        //System.out.println("is Feasible: " + isSolutionFeasible(SASolution));
+        System.out.println(SAQuality);
         return new ChallengeSolution(new HashSet<>(greedySolution.orders()), new HashSet<>(greedySolution.aisles()));
     }
 
@@ -156,7 +156,7 @@ public class ChallengeSolver {
             temperature *= coolingRate;
             iterations++;
         }
-        System.out.println("número de iterações: " + iterations);
+        //System.out.println("número de iterações: " + iterations);
         return bestSolution;
     }
 
