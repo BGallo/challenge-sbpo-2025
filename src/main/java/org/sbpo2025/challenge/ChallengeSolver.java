@@ -1,7 +1,5 @@
 package org.sbpo2025.challenge;
 
-import org.apache.commons.lang3.time.StopWatch;
-
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -9,10 +7,18 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+
+import org.apache.commons.lang3.time.StopWatch;
 
 public class ChallengeSolver {
     private final long MAX_RUNTIME = 60;
@@ -29,24 +35,21 @@ public class ChallengeSolver {
 
     protected final int maxNoImprovementIterations = 100;
 
-    protected HashMap<Neighborhood, Double> weightedAddAislesNeighborhoods = new HashMap<>() {{
+    protected HashMap<Neighborhood, Double> weightedNeighborhoods = new HashMap<>() {{
             put(new AddBestAisles(), 1.0);
-    }};
-
-    protected HashMap<Neighborhood, Double> weightedRemoveAislesNeighborhoods = new HashMap<>() {{
             put(new RemoveRandomAisles(), 1.0);
-    }};
-
-    protected HashMap<Neighborhood, Double> weightedAddOrdersNeighborhoods = new HashMap<>() {{
+            put(new RemoveWorstAisles(), 1.0);
             put(new AddBestOrders(), 1.0);
+            put(new RemoveRandomOrders(), 1.0);
+            put(new RemoveWorstOrders(), 1.0);
     }};
 
-    protected HashMap<Neighborhood, Double> weightedRemoveOrdersNeighborhoods = new HashMap<>() {{
-            put(new RemoveRandomOrders(), 1.0);
-    }};
+    protected List<HashMap<Neighborhood, Integer>> bondingFactors = new ArrayList<>();
 
     protected List<Integer> bestOrdersByItemNumber = new ArrayList<>();
     protected List<Integer> bestAislesByItemNumber = new ArrayList<>();
+
+    protected final int nThreads = 4;
 
 
     public ChallengeSolver(
@@ -56,6 +59,10 @@ public class ChallengeSolver {
         this.nItems = nItems;
         this.waveSizeLB = waveSizeLB;
         this.waveSizeUB = waveSizeUB;
+
+        for (int i = 0; i < 6; i++) {
+            bondingFactors.add(new HashMap<>());
+        }
 
         bestOrdersByItemNumber = IntStream.range(0, orders.size())
             .boxed()
@@ -125,148 +132,154 @@ public class ChallengeSolver {
         }
     }
 
-    public ChallengeSolution solve(StopWatch stopWatch) {
+    public ChallengeSolution solve(StopWatch stopWatch) throws InterruptedException, ExecutionException {
+        Random rng = new Random();
+
         ALNSSolution bestSolution = getInitialViableSolution();
 
         ALNSSolution currentSolution = new ALNSSolution(bestSolution);
         ALNSSolution tempSolution;
         int iteration = 0;
         int noImprovementIterations = 0;
-        Neighborhood neighborhood;
-        double randomFactor = 0.7;
+        Neighborhood lastNeighborhood = null;
+        double randomFactor = 0.6;
+
+        ExecutorService executor = Executors.newFixedThreadPool(nThreads);
+
         while (MAX_RUNTIME - stopWatch.getTime(TimeUnit.SECONDS) > 5) {
             iteration++;
             noImprovementIterations++;
 
             tempSolution = new ALNSSolution(currentSolution);
 
-            //ORDER MOVES
+            List<Neighborhood> neighborhoodList = new ArrayList<>();
 
-            //Remove Order Moves
-            neighborhood = selectNeighborhood(weightedRemoveOrdersNeighborhoods);
-            neighborhood.move(currentSolution, currentPercentage, randomFactor);
-
-            if (currentSolution.objectiveValue > bestSolution.objectiveValue) {
-                System.out.println("New best solution at iteration " + iteration + ": " + currentSolution.objectiveValue);
-                bestSolution = new ALNSSolution(currentSolution);
-                noImprovementIterations = 0;
-
-                weightedRemoveOrdersNeighborhoods.merge(neighborhood, 5.0, Double::sum);
-            } else if (currentSolution.objectiveValue > tempSolution.objectiveValue) {
-                tempSolution = new ALNSSolution(currentSolution);
-
-                weightedRemoveOrdersNeighborhoods.merge(neighborhood, 2.0, Double::sum);
+            for (int t = 0; t < nThreads; t++) {
+                neighborhoodList.add(selectNeighborhood(weightedNeighborhoods, lastNeighborhood));
             }
 
-            //Add Order Moves
-            neighborhood = selectNeighborhood(weightedAddOrdersNeighborhoods);
-            neighborhood.move(currentSolution, currentPercentage, randomFactor);
+            List<Future<ALNSSolution>> futures = new ArrayList<>();
 
-            if (currentSolution.objectiveValue > bestSolution.objectiveValue) {
-                System.out.println("New best solution at iteration " + iteration + ": " + currentSolution.objectiveValue);
-                bestSolution = new ALNSSolution(currentSolution);
-                noImprovementIterations = 0;
+            for (Neighborhood neigh : neighborhoodList) {
+                ALNSSolution solutionCopy = new ALNSSolution(currentSolution); // cópia independente
+                futures.add(executor.submit(() -> {
+                    neigh.move(solutionCopy, currentPercentage, randomFactor);
+                    return solutionCopy;
+                }));
+            }
 
-                weightedAddOrdersNeighborhoods.merge(neighborhood, 5.0, Double::sum);
-            } else if (currentSolution.objectiveValue > tempSolution.objectiveValue) {
-                tempSolution = new ALNSSolution(currentSolution);
+            ALNSSolution bestMoveCandidate = null;
+            Neighborhood bestNeighborhood = null;
+            double bestMoveSolution = Double.NEGATIVE_INFINITY;
 
-                weightedAddOrdersNeighborhoods.merge(neighborhood, 2.0, Double::sum);
-            } else {
-                double delta = currentSolution.objectiveValue - tempSolution.objectiveValue;
-                double denominator = Math.max(1000, noImprovementIterations);
-                double acceptanceProbability = Math.exp(delta / denominator);
-
-                if (Math.random() < acceptanceProbability && currentSolution.objectiveValue > 0) {
-                    tempSolution = new ALNSSolution(currentSolution);
-                } else {
-                    currentSolution = new ALNSSolution(tempSolution);
+            for (int i = 0; i < futures.size(); i++) {
+                ALNSSolution candidate = futures.get(i).get();
+                if (candidate.objectiveValue > bestMoveSolution) {
+                    bestMoveSolution = candidate.objectiveValue;
+                    bestMoveCandidate = candidate;
+                    bestNeighborhood = neighborhoodList.get(i);
                 }
             }
 
-            //AISLE MOVES
-
-            //Remove Aisle Moves
-            neighborhood = selectNeighborhood(weightedRemoveAislesNeighborhoods);
-            neighborhood.move(currentSolution, currentPercentage, randomFactor);
+            currentSolution = bestMoveCandidate;
 
             if (currentSolution.objectiveValue > bestSolution.objectiveValue) {
-                System.out.println("New best solution at iteration " + iteration + ": " + currentSolution.objectiveValue);
+                System.out.println("New best solution at iteration " + iteration + ": " + currentSolution.objectiveValue + " in neighborhood " + bestNeighborhood.getClass().getSimpleName());
                 bestSolution = new ALNSSolution(currentSolution);
                 noImprovementIterations = 0;
 
-                weightedRemoveAislesNeighborhoods.merge(neighborhood, 5.0, Double::sum);
-            } else if (currentSolution.objectiveValue > tempSolution.objectiveValue) {
-                tempSolution = new ALNSSolution(currentSolution);
+                weightedNeighborhoods.merge(bestNeighborhood, 5.0, Double::sum);
 
-                weightedRemoveAislesNeighborhoods.merge(neighborhood, 2.0, Double::sum);
-            }
-
-            //Add Aisle Moves
-            neighborhood = selectNeighborhood(weightedAddAislesNeighborhoods);
-            neighborhood.move(currentSolution, currentPercentage, randomFactor);
-
-            if (currentSolution.objectiveValue > bestSolution.objectiveValue) {
-                System.out.println("New best solution at iteration " + iteration + ": " + currentSolution.objectiveValue);
-                bestSolution = new ALNSSolution(currentSolution);
-                noImprovementIterations = 0;
-
-                weightedAddAislesNeighborhoods.merge(neighborhood, 5.0, Double::sum);
-            } else if (currentSolution.objectiveValue > tempSolution.objectiveValue) {
-                tempSolution = new ALNSSolution(currentSolution);
-
-                weightedAddAislesNeighborhoods.merge(neighborhood, 2.0, Double::sum);
-            } else {
-                double delta = currentSolution.objectiveValue - tempSolution.objectiveValue;
-                double denominator = Math.max(1000, noImprovementIterations);
-                double acceptanceProbability = Math.exp(delta / denominator);
-
-                if (Math.random() < acceptanceProbability && currentSolution.objectiveValue > 0) {
-                    tempSolution = new ALNSSolution(currentSolution);
-                } else {
-                    currentSolution = new ALNSSolution(tempSolution);
+                if (lastNeighborhood != null) {
+                    int neighborhoodId = bestNeighborhood.id;
+                    HashMap<Neighborhood, Integer> neighFactor = bondingFactors.get(neighborhoodId);
+                    neighFactor.put(bestNeighborhood, Math.max(neighFactor.getOrDefault(bestNeighborhood, 0) + 1, 10));
                 }
+
+                lastNeighborhood = bestNeighborhood;
+            } else if (currentSolution.objectiveValue > tempSolution.objectiveValue) {
+                tempSolution = new ALNSSolution(currentSolution);
+
+                weightedNeighborhoods.merge(bestNeighborhood, 2.0, Double::sum);
+
+                lastNeighborhood = bestNeighborhood;
+            } else {
+                if (noImprovementIterations == maxNoImprovementIterations * 3) {
+                    switch (rng.nextInt(4)) {
+                        case 0:
+                            currentSolution = new ALNSSolution(bestSolution);
+                            break;
+
+                        case 1:
+                            currentSolution = getRandomSolution();
+                            break;
+
+                        case 2:
+                            currentSolution = getOppositeSolution(bestSolution);
+                            break;
+                        case 3:
+                            currentSolution = getHalfSolution(bestSolution);
+                            break;
+                    }
+                    noImprovementIterations = 0;
+                    lastNeighborhood = null;
+                } else {
+                    tempSolution = new ALNSSolution(currentSolution);
+                    lastNeighborhood = bestNeighborhood;
+                }   
             }
 
             currentPercentage = Math.min(maxPercentage,
                     minPercentage + (noImprovementIterations / (maxNoImprovementIterations / (maxPercentage - minPercentage))));
 
-            evaporateAllWeights(); 
+            evaporateWeights(weightedNeighborhoods);
         }
 
+        executor.shutdown();
+
         System.out.println("Is viable: " + isSolutionFeasible(bestSolution));
+        System.out.println("weightedNeighborhoods: " + weightedNeighborhoods);
 
         return new ChallengeSolution(new HashSet<>(bestSolution.selectedOrders), new HashSet<>(bestSolution.selectedAisles));
     }
 
-
-    public void evaporateAllWeights() {
-        evaporateWeights(weightedAddAislesNeighborhoods);
-        evaporateWeights(weightedRemoveAislesNeighborhoods);
-        evaporateWeights(weightedAddOrdersNeighborhoods);
-        evaporateWeights(weightedRemoveOrdersNeighborhoods);
-    }
-
     public void evaporateWeights(HashMap<Neighborhood, Double> neighborhoods) {
         for (Map.Entry<Neighborhood, Double> entry : neighborhoods.entrySet()) {
-            neighborhoods.put(entry.getKey(), Math.max(0.1, entry.getValue() * 0.9));
+            neighborhoods.put(entry.getKey(), Math.max(1.0, entry.getValue() * 0.8));
         }
     }
 
-    public Neighborhood selectNeighborhood(HashMap<Neighborhood, Double> neighborhoods) {
-        double totalWeight = neighborhoods.values().stream().mapToDouble(Double::doubleValue).sum();
+    public Neighborhood selectNeighborhood(
+        HashMap<Neighborhood, Double> neighborhoods,
+        Neighborhood lastNeighborhood) {
+
+        Map<Neighborhood, Double> effectiveWeights = new HashMap<>();
+        double totalWeight = 0.0;
+
+        for (Map.Entry<Neighborhood, Double> entry : neighborhoods.entrySet()) {
+            double weight = entry.getValue();
+            if (lastNeighborhood != null) {
+                weight += bondingFactors.get(entry.getKey().id).getOrDefault(lastNeighborhood, 0);
+            }
+            if (entry.getKey().equals(lastNeighborhood)) {
+                weight *= 0.2;
+            }
+
+            effectiveWeights.put(entry.getKey(), weight);
+            totalWeight += weight;
+        }
+
         double r = Math.random() * totalWeight;
         double cumulative = 0.0;
 
-        for (Map.Entry<Neighborhood, Double> entry : neighborhoods.entrySet()) {
+        for (Map.Entry<Neighborhood, Double> entry : effectiveWeights.entrySet()) {
             cumulative += entry.getValue();
-            if (r <= cumulative) {
-                return entry.getKey();
-            }
+            if (r <= cumulative) return entry.getKey();
         }
 
         return neighborhoods.keySet().iterator().next();
     }
+
 
     private ALNSSolution getInitialViableSolution() {
         List<Integer> selectedOrders = new ArrayList<>();
@@ -320,7 +333,82 @@ public class ChallengeSolver {
         return initialSolution;
     }
 
+    private ALNSSolution getRandomSolution() {
+        List<Integer> selectedOrders = new ArrayList<>();
+        List<Integer> selectedAisles = new ArrayList<>();
+
+        // Randomly select orders
+        for (int i = 0; i < orders.size(); i++) {
+            if (Math.random() < 0.5) {  
+                selectedOrders.add(i);
+            }
+        }
+
+        // Randomly select aisles
+        for (int i = 0; i < aisles.size(); i++) {
+            if (Math.random() < 0.5) { 
+                selectedAisles.add(i);
+            }
+        }
+
+        ALNSSolution randomSolution = new ALNSSolution(selectedOrders, selectedAisles);
+        
+        boolean feasible = isSolutionFeasible(randomSolution);
+        randomSolution.objectiveValue = feasible ? computeObjectiveFunction(randomSolution) : 0.0;
+        randomSolution.calcItemsLeftInAisles();
+
+        return randomSolution;
+    }
+
+    private ALNSSolution getOppositeSolution(ALNSSolution solution) {
+        List<Integer> selectedOrders = new ArrayList<>();
+        List<Integer> selectedAisles = new ArrayList<>();
+
+        Set<Integer> orderSet = new HashSet<>(solution.selectedOrders);
+        Set<Integer> aisleSet = new HashSet<>(solution.selectedAisles);
+
+        for (int i = 0; i < orders.size(); i++) {
+            if (!orderSet.contains(i)) {
+                selectedOrders.add(i);
+            }
+        }
+
+        for (int i = 0; i < aisles.size(); i++) {
+            if (!aisleSet.contains(i)) {
+                selectedAisles.add(i);
+            }
+        }
+
+        ALNSSolution oppositeSolution = new ALNSSolution(selectedOrders, selectedAisles);
+
+        boolean feasible = isSolutionFeasible(oppositeSolution);
+        oppositeSolution.objectiveValue = feasible ? computeObjectiveFunction(oppositeSolution) : 0.0;
+        oppositeSolution.calcItemsLeftInAisles();
+
+        return oppositeSolution;
+    }
+
+    private ALNSSolution getHalfSolution(ALNSSolution solution) {
+        List<Integer> selectedOrders = new ArrayList<>(solution.selectedOrders);
+        List<Integer> selectedAisles = new ArrayList<>(solution.selectedAisles);
+
+        Collections.shuffle(selectedOrders);
+        Collections.shuffle(selectedAisles);
+
+        selectedOrders = selectedOrders.subList(0, selectedOrders.size() / 2);
+        selectedAisles = selectedAisles.subList(0, selectedAisles.size() / 2);
+
+        ALNSSolution halfSolution = new ALNSSolution(selectedOrders, selectedAisles);
+
+        boolean feasible = isSolutionFeasible(halfSolution);
+        halfSolution.objectiveValue = feasible ? computeObjectiveFunction(halfSolution) : 0.0;
+        halfSolution.calcItemsLeftInAisles();
+
+        return halfSolution;
+    }
+
     class Neighborhood {
+        public int id;
 
         public void move(ALNSSolution currentSolution, double percentage, double randomFactor) {
 
@@ -328,19 +416,23 @@ public class ChallengeSolver {
                 currentSolution.objectiveValue = 0.0;
                 return;
             }
+
             double quality = computeObjectiveFunction(currentSolution);
             currentSolution.objectiveValue = quality;
         }
     }
 
     class RemoveRandomAisles extends Neighborhood {
+        public int id = 0;
+
         @Override
         public void move(ALNSSolution currentSolution, double percentage, double randomFactor) {
             if (currentSolution.selectedAisles.size() <= 1) {
+                super.move(currentSolution, percentage, randomFactor);
                 return;
             }
 
-            Collections.shuffle(currentSolution.selectedAisles);
+            Collections.shuffle(currentSolution.selectedAisles, ThreadLocalRandom.current());
 
             int nToRemove = (int) Math.ceil(currentSolution.selectedAisles.size() * (percentage / 100.0));
             nToRemove = Math.max(1, nToRemove);
@@ -357,10 +449,53 @@ public class ChallengeSolver {
         }
     }
 
-    class RemoveRandomOrders extends Neighborhood {
+    class RemoveWorstAisles extends Neighborhood {
+        public int id = 1;
+
         @Override
         public void move(ALNSSolution currentSolution, double percentage, double randomFactor) {
-            Collections.shuffle(currentSolution.selectedOrders);
+            if (currentSolution.selectedAisles.size() <= 1) {
+                super.move(currentSolution, percentage, randomFactor);
+                return;
+            }
+
+            Set<Integer> selectedSet = new HashSet<>(currentSolution.selectedAisles);
+            List<Integer> candidateAisles = bestAislesByItemNumber.stream()
+                .filter(a -> selectedSet.contains(a))
+                .collect(Collectors.toList());
+            Collections.reverse(candidateAisles);
+
+            int nToRemove = (int) Math.ceil(currentSolution.selectedAisles.size() * (percentage / 100.0));
+            nToRemove = Math.max(1, nToRemove);
+
+            for (int i = 0; nToRemove > 0 && i < candidateAisles.size(); i++) {
+                int aisle = candidateAisles.get(i);
+
+                if (ThreadLocalRandom.current().nextDouble() > randomFactor) continue;
+
+                currentSolution.selectedAisles.remove(Integer.valueOf(aisle));
+                nToRemove--;
+
+                for (Map.Entry<Integer, Integer> entry : aisles.get(aisle).entrySet()) {
+                    currentSolution.itensLeftInAisles.merge(entry.getKey(), -entry.getValue(), Integer::sum);
+                }
+            }
+
+            super.move(currentSolution, percentage, randomFactor);
+        }
+    }
+
+    class RemoveRandomOrders extends Neighborhood {
+        public int id = 2;
+
+        @Override
+        public void move(ALNSSolution currentSolution, double percentage, double randomFactor) {
+            if (currentSolution.selectedOrders.size() < 1) {
+                super.move(currentSolution, percentage, randomFactor);
+                return;
+            }
+
+            Collections.shuffle(currentSolution.selectedOrders, ThreadLocalRandom.current());
 
             int nToRemove = (int) Math.ceil(currentSolution.selectedOrders.size() * (percentage / 100.0));
             nToRemove = Math.max(1, nToRemove);
@@ -378,7 +513,46 @@ public class ChallengeSolver {
         }
     }
 
+    class RemoveWorstOrders extends Neighborhood {
+        public int id = 3;
+
+        @Override
+        public void move(ALNSSolution currentSolution, double percentage, double randomFactor) {
+            if (currentSolution.selectedOrders.size() < 1) {
+                super.move(currentSolution, percentage, randomFactor);
+                return;
+            }
+
+            Set<Integer> selectedSet = new HashSet<>(currentSolution.selectedOrders);
+            List<Integer> candidateOrders = bestOrdersByItemNumber.stream()
+                .filter(o -> selectedSet.contains(o))
+                .collect(Collectors.toList());
+            Collections.reverse(candidateOrders);
+
+            int nToRemove = (int) Math.ceil(currentSolution.selectedOrders.size() * (percentage / 100.0));
+            nToRemove = Math.max(1, nToRemove);
+
+            for (int i = 0; nToRemove > 0 && i < candidateOrders.size(); i++) {
+                int order = candidateOrders.get(i);
+
+                if (ThreadLocalRandom.current().nextDouble() > randomFactor) continue;
+
+                currentSolution.selectedOrders.remove(Integer.valueOf(order));
+                nToRemove--;
+
+                for (Map.Entry<Integer, Integer> entry : orders.get(order).entrySet()) {
+                    currentSolution.itensLeftInAisles.merge(entry.getKey(), entry.getValue(), Integer::sum);
+                    currentSolution.totalItemsPicked -= entry.getValue();
+                }
+            }
+
+            super.move(currentSolution, percentage, randomFactor);
+        }
+    }
+
     class AddBestOrders extends Neighborhood {
+        public int id = 4;
+
         @Override
         public void move(ALNSSolution currentSolution, double percentage, double randomFactor) {
             Set<Integer> selectedSet = new HashSet<>(currentSolution.selectedOrders);
@@ -387,6 +561,7 @@ public class ChallengeSolver {
                 .collect(Collectors.toList());
 
             if (candidateOrders.isEmpty()) {
+                super.move(currentSolution, percentage, randomFactor);
                 return;
             }
 
@@ -408,7 +583,7 @@ public class ChallengeSolver {
                     }
                 }
 
-                if (canFulfill && Math.random() < randomFactor) {
+                if (canFulfill && ThreadLocalRandom.current().nextDouble() < randomFactor) {
                     currentSolution.selectedOrders.add(order);
                     currentSolution.totalItemsPicked += orderTotalItems;
                     for (Map.Entry<Integer, Integer> entry : orderItems.entrySet()) {
@@ -424,6 +599,8 @@ public class ChallengeSolver {
     }
 
     class AddBestAisles extends Neighborhood {
+        public int id = 5;
+
         @Override
         public void move(ALNSSolution currentSolution, double percentage, double randomFactor) {
             Set<Integer> selectedSet = new HashSet<>(currentSolution.selectedAisles);
@@ -432,20 +609,21 @@ public class ChallengeSolver {
                 .collect(Collectors.toList());
 
             if (candidateAisles.isEmpty()) {
+                super.move(currentSolution, percentage, randomFactor);
                 return;
             }
 
             boolean valid = false;
 
             for (int aisle : candidateAisles) {
-                if (Math.random() < randomFactor) {
+                if (ThreadLocalRandom.current().nextDouble() < randomFactor) {
                     currentSolution.selectedAisles.add(aisle);
                     for (Map.Entry<Integer, Integer> entry : aisles.get(aisle).entrySet()) {
                         currentSolution.itensLeftInAisles.merge(entry.getKey(), entry.getValue(), Integer::sum);
                     }
                 }
 
-                if (valid && Math.random() < randomFactor) {
+                if (valid && ThreadLocalRandom.current().nextDouble() < randomFactor) {
                     break;
                 } else if (currentSolution.itensLeftInAisles.values().stream().allMatch(v -> v >= 0)) {
                     valid = true;
@@ -455,6 +633,9 @@ public class ChallengeSolver {
             super.move(currentSolution, percentage, randomFactor);
         }
     }
+    
+
+    
     /*
      * Get the remaining time in seconds
      */

@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
 
 public class Challenge {
 
@@ -108,7 +109,7 @@ public class Challenge {
         }
     }
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws InterruptedException, ExecutionException {
         // Start the stopwatch to track the running time
         StopWatch stopWatch = StopWatch.createStarted();
 
