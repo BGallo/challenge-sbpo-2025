@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "java",
+      "name": "Debug Challenge",
+      "request": "launch",
+      "mainClass": "org.sbpo2025.challenge.Challenge",
+      "args": [
+        "datasets/a/instance_0020.txt",
+        "output.txt"
+      ],
+      "vmArgs": "-Xmx4g"
+    }
+  ]
+}
