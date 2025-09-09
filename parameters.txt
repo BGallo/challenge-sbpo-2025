@@ -1,0 +1,6 @@
+
+alpha "--alpha" r (0.1, 0.9)
+shakeCooldown "--shakeCooldown" i (3, 15)
+greedyCooldown "--greedyCooldown" i (3, 15)
+k "--k" i (1, 8)
+

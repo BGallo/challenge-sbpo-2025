@@ -1,6 +1,7 @@
 package org.sbpo2025.challenge;
 
 import org.apache.commons.lang3.time.StopWatch;
+import org.sbpo2025.challenge.ChallengeSolver.RVNDSolution;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -14,6 +15,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.time.temporal.TemporalUnit;
 
 public class Challenge {
@@ -104,7 +106,6 @@ public class Challenge {
             }
 
             writer.close();
-            System.out.println("Output written to " + outputFilePath);
 
         } catch (IOException e) {
             System.err.println("Error writing output to " + outputFilePath);
@@ -113,25 +114,23 @@ public class Challenge {
     }
 
     public static void main(String[] args) {
-        LocalTime startTime = LocalTime.now();
-        System.out.println("Start time: " + startTime);
         // Start the stopwatch to track the running time
         StopWatch stopWatch = StopWatch.createStarted();
 
-        if (args.length != 2) {
-            System.out.println("Usage: java -jar target/ChallengeSBPO2025-1.0.jar <inputFilePath> <outputFilePath>");
-            return;
-        }
+        double alpha = Double.parseDouble(args[2]);
+        int shakeCooldown = Integer.parseInt(args[3]);
+        int greedyCooldown = Integer.parseInt(args[4]);
+        int k = Integer.parseInt(args[5]);
 
         Challenge challenge = new Challenge();
         challenge.readInput(args[0]);
         var challengeSolver = new ChallengeSolver(
-                challenge.orders, challenge.aisles, challenge.nItems, challenge.waveSizeLB, challenge.waveSizeUB);
+                challenge.orders, challenge.aisles, challenge.nItems, challenge.waveSizeLB, challenge.waveSizeUB, alpha, shakeCooldown, greedyCooldown, k);
         ChallengeSolution challengeSolution = challengeSolver.solve(stopWatch);
 
+        System.out.println(challengeSolver.computeObjectiveFunction(challengeSolution));
         challenge.writeOutput(challengeSolution, args[1]);
-
-        LocalTime endTime = LocalTime.now();
-        System.out.println("Finished time: " + endTime + " (Elapsed time: " + startTime.until(endTime, ChronoUnit.MINUTES) + ")");
     }
+
+
 }
