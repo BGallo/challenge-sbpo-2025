@@ -1,0 +1,6 @@
+
+maxPercentage "--maxPercentage" r (30, 70)
+minPercentage "--minPercentage" r (5, 30)
+maxNoImprovementIterations "--maxNoImprovementIterations" i (50, 500)
+randomFactor "--randomFactor" r (0.1, 0.9)
+

@@ -1,0 +1,4 @@
+Best-so-far configuration:          13    mean value:    -0.9192520026
+Description of the best-so-far configuration:
+   .ID. maxPercentage minPercentage maxNoImprovementIterations randomFactor
+13   13       67.0214       22.0642                        318       0.8897

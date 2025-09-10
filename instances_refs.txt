@@ -1,0 +1,3 @@
+datasets/a/instance_0008.txt 162.94
+datasets/a/instance_0006.txt 691.36
+datasets/a/instance_0019.txt 202.0

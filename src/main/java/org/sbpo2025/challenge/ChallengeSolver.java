@@ -29,11 +29,13 @@ public class ChallengeSolver {
     protected int waveSizeLB;
     protected int waveSizeUB;
 
-    protected final int maxPercentage = 40;
-    protected final int minPercentage = 10;
-    protected int currentPercentage = 10;
+    protected double maxPercentage;
+    protected double minPercentage;
+    protected double currentPercentage;
 
-    protected final int maxNoImprovementIterations = 100;
+    protected int maxNoImprovementIterations;
+
+    protected double randomFactor;
 
     protected HashMap<Neighborhood, Double> weightedNeighborhoods = new HashMap<>() {{
             put(new AddBestAisles(), 1.0);
@@ -49,16 +51,21 @@ public class ChallengeSolver {
     protected List<Integer> bestOrdersByItemNumber = new ArrayList<>();
     protected List<Integer> bestAislesByItemNumber = new ArrayList<>();
 
-    protected final int nThreads = 4;
+    protected final int nThreads = 8;
 
 
     public ChallengeSolver(
-            List<Map<Integer, Integer>> orders, List<Map<Integer, Integer>> aisles, int nItems, int waveSizeLB, int waveSizeUB) {
+            List<Map<Integer, Integer>> orders, List<Map<Integer, Integer>> aisles, int nItems, int waveSizeLB, int waveSizeUB, double maxPercentage, double minPercentage, int maxNoImprovementIterations, double randomFactor) {
         this.orders = orders;
         this.aisles = aisles;
         this.nItems = nItems;
         this.waveSizeLB = waveSizeLB;
         this.waveSizeUB = waveSizeUB;
+        this.maxPercentage = maxPercentage;
+        this.minPercentage = minPercentage;
+        this.currentPercentage = minPercentage;
+        this.maxNoImprovementIterations = maxNoImprovementIterations;
+        this.randomFactor = randomFactor;
 
         for (int i = 0; i < 6; i++) {
             bondingFactors.add(new HashMap<>());
@@ -142,7 +149,6 @@ public class ChallengeSolver {
         int iteration = 0;
         int noImprovementIterations = 0;
         Neighborhood lastNeighborhood = null;
-        double randomFactor = 0.6;
 
         ExecutorService executor = Executors.newFixedThreadPool(nThreads);
 
@@ -184,7 +190,6 @@ public class ChallengeSolver {
             currentSolution = bestMoveCandidate;
 
             if (currentSolution.objectiveValue > bestSolution.objectiveValue) {
-                System.out.println("New best solution at iteration " + iteration + ": " + currentSolution.objectiveValue + " in neighborhood " + bestNeighborhood.getClass().getSimpleName());
                 bestSolution = new ALNSSolution(currentSolution);
                 noImprovementIterations = 0;
 
@@ -196,6 +201,7 @@ public class ChallengeSolver {
                     neighFactor.put(bestNeighborhood, Math.max(neighFactor.getOrDefault(bestNeighborhood, 0) + 1, 10));
                 }
 
+                System.out.println("New best solution in iteration " + iteration + ": " + bestSolution.objectiveValue);
                 lastNeighborhood = bestNeighborhood;
             } else if (currentSolution.objectiveValue > tempSolution.objectiveValue) {
                 tempSolution = new ALNSSolution(currentSolution);
@@ -237,8 +243,7 @@ public class ChallengeSolver {
 
         executor.shutdown();
 
-        System.out.println("Is viable: " + isSolutionFeasible(bestSolution));
-        System.out.println("weightedNeighborhoods: " + weightedNeighborhoods);
+        System.out.println(bestSolution.objectiveValue);
 
         return new ChallengeSolution(new HashSet<>(bestSolution.selectedOrders), new HashSet<>(bestSolution.selectedAisles));
     }

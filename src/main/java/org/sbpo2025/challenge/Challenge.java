@@ -101,7 +101,7 @@ public class Challenge {
             }
 
             writer.close();
-            System.out.println("Output written to " + outputFilePath);
+            /* System.out.println("Output written to " + outputFilePath); */
 
         } catch (IOException e) {
             System.err.println("Error writing output to " + outputFilePath);
@@ -113,15 +113,15 @@ public class Challenge {
         // Start the stopwatch to track the running time
         StopWatch stopWatch = StopWatch.createStarted();
 
-        if (args.length != 2) {
-            System.out.println("Usage: java -jar target/ChallengeSBPO2025-1.0.jar <inputFilePath> <outputFilePath>");
-            return;
-        }
+        double maxPercentage = Double.parseDouble(args[2]);
+        double minPercentage = Double.parseDouble(args[3]);
+        int maxNoImprovementIterations = Integer.parseInt(args[4]);
+        double randomFactor = Double.parseDouble(args[5]);
 
         Challenge challenge = new Challenge();
         challenge.readInput(args[0]);
         var challengeSolver = new ChallengeSolver(
-                challenge.orders, challenge.aisles, challenge.nItems, challenge.waveSizeLB, challenge.waveSizeUB);
+                challenge.orders, challenge.aisles, challenge.nItems, challenge.waveSizeLB, challenge.waveSizeUB, maxPercentage, minPercentage, maxNoImprovementIterations, randomFactor);
         ChallengeSolution challengeSolution = challengeSolver.solve(stopWatch);
 
         challenge.writeOutput(challengeSolution, args[1]);
