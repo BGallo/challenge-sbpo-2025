@@ -20,7 +20,7 @@ public class ChallengeSolver {
     protected List<Integer> bestOrdersByItemNumber = new ArrayList<>();
     protected List<Integer> bestAislesByItemNumber = new ArrayList<>();
 
-    protected final int nThreads = 8;
+    protected final int nThreads = 4;
 
 
     public ChallengeSolver(
@@ -101,6 +101,18 @@ public class ChallengeSolver {
         }
     }
 
+    private interface LocalSearchStrategy {
+        void apply(ILSSolution sol, Random rand);
+    }
+
+    private final List<LocalSearchStrategy> strategies = Arrays.asList(
+        (sol, rand) -> { tryAddBestOrders(sol); },   // comb 1
+        (sol, rand) -> { tryRemoveWorstAisles(sol); },   // comb 2
+        (sol, rand) -> { tryAddRandomOrders(sol, rand); }, // comb 3
+        (sol, rand) -> { tryRemoveRandomAisles(sol, rand); }   // comb 4
+    );
+
+
     public ChallengeSolution solve(StopWatch stopWatch) {
 
 
@@ -116,15 +128,16 @@ public class ChallengeSolver {
         double alpha = 0.2;
 
         int iter = 0;
-        while (stopWatch.getTime(TimeUnit.SECONDS) < 30) { // critério de parada
+        while (stopWatch.getTime(TimeUnit.SECONDS) < 60) { // critério de parada
             // --- Busca Local
-            localSearch(current);
+            current = localSearchParallel(current, nThreads, rnd);
 
             // --- Atualiza melhor
             if (current.objectiveValue > best.objectiveValue) {
                 alpha = 0.2;
                 best = new ILSSolution(current);
             } else {
+                if(alpha<0.40)
                 alpha+=0.01;
             }
 
@@ -198,31 +211,44 @@ public class ChallengeSolver {
         return initialSolution;
     }
 
-    private void localSearch(ILSSolution sol) {
-        boolean improved = true;
-        while (improved) {
-            improved = false;
+    private ILSSolution localSearchParallel(ILSSolution sol, int nThreads, Random rand) {
+        ExecutorService executor = Executors.newFixedThreadPool(nThreads);
+        List<Callable<ILSSolution>> tasks = new ArrayList<>();
 
-            // Tenta adicionar ordens boas
-            if (tryAddBestOrder(sol)) {
-                improved = true;
-                continue;
-            }
+        // pega até nThreads combinações
+        for (int i = 0; i < nThreads && i < strategies.size(); i++) {
+            int idx = i;
+            tasks.add(() -> {
+                ILSSolution copy = new ILSSolution(sol); // cada thread trabalha numa cópia
+                strategies.get(idx).apply(copy, new Random(rand.nextLong())); // usa seed diferente
+                copy.objectiveValue = computeObjectiveFunction(copy);
+                return copy;
+            });
+        }
 
-            // Tenta remover corredores ruins
-            if (tryRemoveWorstAisle(sol)) {
-                improved = true;
+        try {
+            List<Future<ILSSolution>> results = executor.invokeAll(tasks);
+            executor.shutdown();
+
+            // pega o melhor resultado
+            ILSSolution bestLocal = sol;
+            for (Future<ILSSolution> f : results) {
+                ILSSolution candidate = f.get();
+                if (candidate.objectiveValue > bestLocal.objectiveValue) {
+                    bestLocal = candidate;
+                }
             }
+            return bestLocal;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return sol;
         }
     }
 
     private boolean tryAddBestOrder(ILSSolution sol) {
         Set<Integer> selectedOrders = new HashSet<>(sol.selectedOrders);
 
-        int bestGain = 0;
-        Integer bestOrder = null;
-
-        for (int order = 0; order < orders.size(); order++) {
+        for (int order : bestOrdersByItemNumber) {
             if (selectedOrders.contains(order)) continue;
 
             Map<Integer, Integer> orderItems = orders.get(order);
@@ -240,51 +266,14 @@ public class ChallengeSolver {
                 }
             }
 
-            if (canFulfill && orderTotalItems > bestGain) {
-                bestGain = orderTotalItems;
-                bestOrder = order;
-            }
-        }
+            if (canFulfill) {
+                sol.selectedOrders.add(order);
+                sol.totalItemsPicked += orderTotalItems;
 
-        if (bestOrder != null) {
-            sol.selectedOrders.add(bestOrder);
-            int orderTotalItems = orders.get(bestOrder).values().stream().mapToInt(Integer::intValue).sum();
-            sol.totalItemsPicked += orderTotalItems;
-
-            for (Map.Entry<Integer, Integer> entry : orders.get(bestOrder).entrySet()) {
-                sol.itensLeftInAisles.merge(entry.getKey(), -entry.getValue(), Integer::sum);
-            }
-
-            sol.objectiveValue = computeObjectiveFunction(sol);
-            return true;
-        }
-
-        return false;
-    }
-
-    private boolean tryRemoveWorstAisle(ILSSolution sol) {
-        if (sol.selectedAisles.size() <= 1) return false;
-
-        for (int aisle : new ArrayList<>(sol.selectedAisles)) {
-            boolean canRemove = true;
-
-            // simula a remoção do corredor
-            for (Map.Entry<Integer, Integer> entry : aisles.get(aisle).entrySet()) {
-                int item = entry.getKey();
-                int qty = entry.getValue();
-
-                // Se já está no limite de suprimento, não dá para remover
-                if (sol.itensLeftInAisles.getOrDefault(item, 0) + qty < 0) {
-                    canRemove = false;
-                    break;
-                }
-            }
-
-            if (canRemove) {
-                sol.selectedAisles.remove(Integer.valueOf(aisle));
-                for (Map.Entry<Integer, Integer> entry : aisles.get(aisle).entrySet()) {
+                for (Map.Entry<Integer, Integer> entry : orderItems.entrySet()) {
                     sol.itensLeftInAisles.merge(entry.getKey(), -entry.getValue(), Integer::sum);
                 }
+
                 sol.objectiveValue = computeObjectiveFunction(sol);
                 return true;
             }
@@ -293,7 +282,190 @@ public class ChallengeSolver {
         return false;
     }
 
+    private void tryAddBestOrders(ILSSolution sol) {
+        Set<Integer> selectedOrders = new HashSet<>(sol.selectedOrders);
+        for (int order : bestOrdersByItemNumber) {
+            if (selectedOrders.contains(order)) continue;
 
+            Map<Integer, Integer> orderItems = orders.get(order);
+            int orderTotalItems = orderItems.values().stream().mapToInt(Integer::intValue).sum();
+
+            if (sol.totalItemsPicked + orderTotalItems > waveSizeUB) continue;
+
+            boolean canFulfill = true;
+            for (Map.Entry<Integer, Integer> entry : orderItems.entrySet()) {
+                int item = entry.getKey();
+                int qty = entry.getValue();
+                if (sol.itensLeftInAisles.getOrDefault(item, 0) < qty) {
+                    canFulfill = false;
+                    break;
+                }
+            }
+
+            if (canFulfill) {
+                sol.selectedOrders.add(order);
+                sol.totalItemsPicked += orderTotalItems;
+
+                for (Map.Entry<Integer, Integer> entry : orderItems.entrySet()) {
+                    sol.itensLeftInAisles.merge(entry.getKey(), -entry.getValue(), Integer::sum);
+                }
+            } else break;
+        }
+    }
+
+    private void tryAddRandomOrders(ILSSolution sol, Random rnd) {
+        Set<Integer> selectedOrders = new HashSet<>(sol.selectedOrders);
+
+        // pega todos os pedidos ainda não selecionados
+        List<Integer> candidateOrders = IntStream.range(0, orders.size())
+                .filter(o -> !selectedOrders.contains(o))
+                .boxed()
+                .collect(Collectors.toList());
+
+        // embaralha para iterar em ordem aleatória
+        Collections.shuffle(candidateOrders, rnd);
+
+        for (int order : candidateOrders) {
+            Map<Integer, Integer> orderItems = orders.get(order);
+            int orderTotalItems = orderItems.values().stream().mapToInt(Integer::intValue).sum();
+
+            if (sol.totalItemsPicked + orderTotalItems > waveSizeUB) continue;
+
+            boolean canFulfill = true;
+            for (Map.Entry<Integer, Integer> entry : orderItems.entrySet()) {
+                int item = entry.getKey();
+                int qty = entry.getValue();
+                if (sol.itensLeftInAisles.getOrDefault(item, 0) < qty) {
+                    canFulfill = false;
+                    break;
+                }
+            }
+
+            if (canFulfill) {
+                sol.selectedOrders.add(order);
+                sol.totalItemsPicked += orderTotalItems;
+
+                for (Map.Entry<Integer, Integer> entry : orderItems.entrySet()) {
+                    sol.itensLeftInAisles.merge(entry.getKey(), -entry.getValue(), Integer::sum);
+                }
+            } else break;
+        }
+    }
+
+
+    private boolean tryRemoveWorstAisle(ILSSolution sol) {
+        if (sol.selectedAisles.size() <= 1) return false;
+
+        Set<Integer> selectedSet = new HashSet<>(sol.selectedAisles);
+
+        // pega apenas os corredores já selecionados, ordenados do pior para o melhor
+        List<Integer> candidateAisles = bestAislesByItemNumber.stream()
+                .filter(selectedSet::contains)
+                .collect(Collectors.toList());
+        Collections.reverse(candidateAisles); // corredores com menos itens primeiro
+
+        for (int aisle : candidateAisles) {
+            boolean canRemove = true;
+
+            // simula a remoção do corredor
+            for (Map.Entry<Integer, Integer> entry : aisles.get(aisle).entrySet()) {
+                int item = entry.getKey();
+                int qty = entry.getValue();
+
+                // se já está no limite de suprimento, não dá para remover
+                if (sol.itensLeftInAisles.getOrDefault(item, 0) + qty < 0) {
+                    canRemove = false;
+                    break;
+                }
+            }
+
+            if (canRemove) {
+                sol.selectedAisles.remove(Integer.valueOf(aisle));
+
+                for (Map.Entry<Integer, Integer> entry : aisles.get(aisle).entrySet()) {
+                    sol.itensLeftInAisles.merge(entry.getKey(), -entry.getValue(), Integer::sum);
+                }
+
+                sol.objectiveValue = computeObjectiveFunction(sol);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void tryRemoveWorstAisles(ILSSolution sol) {
+        if (sol.selectedAisles.size() <= 1) return;
+
+        Set<Integer> selectedSet = new HashSet<>(sol.selectedAisles);
+
+        // pega apenas os corredores já selecionados, ordenados do pior para o melhor
+        List<Integer> candidateAisles = bestAislesByItemNumber.stream()
+                .filter(selectedSet::contains)
+                .collect(Collectors.toList());
+        Collections.reverse(candidateAisles); // corredores com menos itens primeiro
+
+        for (int aisle : candidateAisles) {
+            boolean canRemove = true;
+
+            // simula a remoção do corredor
+            for (Map.Entry<Integer, Integer> entry : aisles.get(aisle).entrySet()) {
+                int item = entry.getKey();
+                int qty = entry.getValue();
+
+                // se já está no limite de suprimento, não dá para remover
+                if (sol.itensLeftInAisles.getOrDefault(item, 0) + qty < 0) {
+                    canRemove = false;
+                    break;
+                }
+            }
+
+            if (canRemove) {
+                sol.selectedAisles.remove(Integer.valueOf(aisle));
+
+                for (Map.Entry<Integer, Integer> entry : aisles.get(aisle).entrySet()) {
+                    sol.itensLeftInAisles.merge(entry.getKey(), -entry.getValue(), Integer::sum);
+                }
+
+                sol.objectiveValue = computeObjectiveFunction(sol);
+            } else break;
+        }
+    }
+
+    private void tryRemoveRandomAisles(ILSSolution sol, Random rnd) {
+        if (sol.selectedAisles.size() <= 1) return;
+
+        List<Integer> candidateAisles = new ArrayList<>(sol.selectedAisles);
+
+        // embaralha a lista para iterar em ordem aleatória
+        Collections.shuffle(candidateAisles, rnd);
+
+        for (int aisle : candidateAisles) {
+            boolean canRemove = true;
+
+            // simula a remoção do corredor
+            for (Map.Entry<Integer, Integer> entry : aisles.get(aisle).entrySet()) {
+                int item = entry.getKey();
+                int qty = entry.getValue();
+
+                // se já está no limite de suprimento, não dá para remover
+                if (sol.itensLeftInAisles.getOrDefault(item, 0) + qty < 0) {
+                    canRemove = false;
+                    break;
+                }
+            }
+
+            if (canRemove) {
+                sol.selectedAisles.remove(Integer.valueOf(aisle));
+
+                for (Map.Entry<Integer, Integer> entry : aisles.get(aisle).entrySet()) {
+                    sol.itensLeftInAisles.merge(entry.getKey(), -entry.getValue(), Integer::sum);
+                }
+
+                sol.objectiveValue = computeObjectiveFunction(sol);
+            } else break;
+        }
+    }
 
     private ILSSolution perturb(ILSSolution sol, Random rnd, double alpha) {
         ILSSolution newSol = new ILSSolution(sol);
