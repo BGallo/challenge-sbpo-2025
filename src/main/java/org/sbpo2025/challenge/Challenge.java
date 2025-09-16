@@ -2,8 +2,6 @@ package org.sbpo2025.challenge;
 
 import org.apache.commons.lang3.time.StopWatch;
 
-import com.gurobi.gurobi.GRBException;
-
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.FileReader;
@@ -110,23 +108,29 @@ public class Challenge {
         }
     }
 
-    public static void main(String[] args) throws GRBException {
+    public static void main(String[] args) throws Exception {
         // Start the stopwatch to track the running time
         StopWatch stopWatch = StopWatch.createStarted();
 
-        if (args.length != 2) {
+        /* if (args.length != 2) {
             System.out.println("Usage: java -jar target/ChallengeSBPO2025-1.0.jar <inputFilePath> <outputFilePath>");
             return;
-        }
+        } */
+
+        int nThreads = args[2] != null ? Integer.parseInt(args[2]) : 1;
+        double maxPercentage = Double.parseDouble(args[3]);
+        double minPercentage = Double.parseDouble(args[4]);
+        int maxNoImprovementIterations = Integer.parseInt(args[5]);
+        double randomFactor = Double.parseDouble(args[6]);
 
         Challenge challenge = new Challenge();
         challenge.readInput(args[0]);
         var challengeSolver = new ChallengeSolver(
-                challenge.orders, challenge.aisles, challenge.nItems, challenge.waveSizeLB, challenge.waveSizeUB);
-        ChallengeSolution challengeSolution = challengeSolver.solve(stopWatch);
+                challenge.orders, challenge.aisles, challenge.nItems, challenge.waveSizeLB, challenge.waveSizeUB, maxPercentage, minPercentage, maxNoImprovementIterations, randomFactor);
+
+        ChallengeSolution challengeSolution = challengeSolver.solve(stopWatch, nThreads);
 
         challenge.writeOutput(challengeSolution, args[1]);
 
-        LoggerUtils.appendColumnsToLine("results.log", challengeSolver.computeObjectiveFunction(challengeSolution));
     }
 }

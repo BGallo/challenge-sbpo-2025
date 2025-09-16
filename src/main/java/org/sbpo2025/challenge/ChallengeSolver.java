@@ -1,19 +1,33 @@
 package org.sbpo2025.challenge;
 
-import org.apache.commons.lang3.time.StopWatch;
-
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
-import com.gurobi.gurobi.*;
+import org.apache.commons.lang3.time.StopWatch;
+
+import com.gurobi.gurobi.GRB;
+import com.gurobi.gurobi.GRBEnv;
+import com.gurobi.gurobi.GRBException;
+import com.gurobi.gurobi.GRBLinExpr;
+import com.gurobi.gurobi.GRBModel;
+import com.gurobi.gurobi.GRBVar;
 
 public class ChallengeSolver {
-    private final long MAX_RUNTIME = 60; // seconds
+    private final long MAX_RUNTIME = 300; // seconds
 
     protected List<Map<Integer, Integer>> orders;
     protected List<Map<Integer, Integer>> aisles;
@@ -21,26 +35,125 @@ public class ChallengeSolver {
     protected int waveSizeLB;
     protected int waveSizeUB;
 
-    public ChallengeSolver(
-            List<Map<Integer, Integer>> orders, List<Map<Integer, Integer>> aisles, int nItems, int waveSizeLB,
-            int waveSizeUB) {
+    protected double maxPercentage;
+    protected double minPercentage;
+    protected double currentPercentage;
+
+    protected int maxNoImprovementIterations;
+
+    protected double randomFactor;
+
+    protected HashMap<Neighborhood, Double> weightedNeighborhoods = new HashMap<>() {{
+            put(new AddBestAisles(), 1.0);
+            put(new RemoveRandomAisles(), 1.0);
+            put(new RemoveWorstAisles(), 1.0);
+            put(new AddBestOrders(), 1.0);
+            put(new RemoveRandomOrders(), 1.0);
+            put(new RemoveWorstOrders(), 1.0);
+    }};
+
+    protected List<HashMap<Neighborhood, Integer>> bondingFactors = new ArrayList<>();
+
+    protected List<Integer> bestOrdersByItemNumber = new ArrayList<>();
+    protected List<Integer> bestAislesByItemNumber = new ArrayList<>();
+
+     public ChallengeSolver(
+            List<Map<Integer, Integer>> orders, List<Map<Integer, Integer>> aisles, int nItems, int waveSizeLB, int waveSizeUB, double maxPercentage, double minPercentage, int maxNoImprovementIterations, double randomFactor) {
         this.orders = orders;
         this.aisles = aisles;
         this.nItems = nItems;
         this.waveSizeLB = waveSizeLB;
         this.waveSizeUB = waveSizeUB;
+        this.maxPercentage = maxPercentage;
+        this.minPercentage = minPercentage;
+        this.currentPercentage = minPercentage;
+        this.maxNoImprovementIterations = maxNoImprovementIterations;
+        this.randomFactor = randomFactor;
+
+        for (int i = 0; i < 6; i++) {
+            bondingFactors.add(new HashMap<>());
+        }
+
+        bestOrdersByItemNumber = IntStream.range(0, orders.size())
+            .boxed()
+            .sorted((i, j) -> {
+                int sumI = orders.get(i).values().stream().mapToInt(Integer::intValue).sum();
+                int sumJ = orders.get(j).values().stream().mapToInt(Integer::intValue).sum();
+                return Integer.compare(sumJ, sumI);
+            })
+            .collect(Collectors.toList());
+
+        bestAislesByItemNumber = IntStream.range(0, aisles.size())
+            .boxed()
+            .sorted((i, j) -> {
+                int sumI = aisles.get(i).values().stream().mapToInt(Integer::intValue).sum();
+                int sumJ = aisles.get(j).values().stream().mapToInt(Integer::intValue).sum();
+                return Integer.compare(sumJ, sumI);
+            })
+            .collect(Collectors.toList());
     }
 
-    public ChallengeSolution solve(StopWatch stopWatch) throws GRBException {
-        GRBEnv env = initializeGrbEnv(stopWatch);
+    class ALNSSolution {
+        List<Integer> selectedAisles = new ArrayList<>();
+        List<Integer> selectedOrders = new ArrayList<>();
+        Map<Integer, Integer> itensLeftInAisles = new HashMap<>();
+        double objectiveValue;
+        int totalItemsPicked;
+
+        public ALNSSolution() {
+            this.objectiveValue = 0;
+        }
+
+        public ALNSSolution(List<Integer> selectedOrders, List<Integer> selectedAisles) {
+            this.selectedOrders = selectedOrders;
+            this.selectedAisles = selectedAisles;
+        }
+
+        public ALNSSolution(ALNSSolution other) {
+            this.selectedAisles = new ArrayList<>(other.selectedAisles);
+            this.selectedOrders = new ArrayList<>(other.selectedOrders);
+            this.objectiveValue = other.objectiveValue;
+            this.itensLeftInAisles = new HashMap<>(other.itensLeftInAisles);
+            this.totalItemsPicked = other.totalItemsPicked;
+        }
+
+        public void calcItemsLeftInAisles() {
+            itensLeftInAisles.clear();
+
+            for (int aisle : selectedAisles) {
+                for (Map.Entry<Integer, Integer> entry : aisles.get(aisle).entrySet()) {
+                    itensLeftInAisles.merge(entry.getKey(), entry.getValue(), Integer::sum);
+                }
+            }
+
+            for (int order : selectedOrders) {
+                for (Map.Entry<Integer, Integer> entry : orders.get(order).entrySet()) {
+                    itensLeftInAisles.merge(entry.getKey(), -entry.getValue(), Integer::sum);
+                }
+            }
+
+            totalItemsPicked = selectedOrders.stream()
+                    .mapToInt(o -> orders.get(o).values().stream().mapToInt(Integer::intValue).sum())
+                    .sum();
+        }
+
+        public String toString() {
+            return "Orders: " + selectedOrders.toString() + ", Aisles: " + selectedAisles.toString() + ", Obj: " + objectiveValue;
+        }
+    }
+
+    public ChallengeSolution solve(StopWatch stopWatch, int nThreads) throws Exception {
+        GRBEnv env = initializeGrbEnv(stopWatch, nThreads);
         if (env == null) {
             return null;
         }
 
 
-        ChallengeSolution solution = getInitialViableSolution();
+        ALNSSolution solution = getInitialViableSolution();
+        System.out.println("Initial solution: " + solution.objectiveValue);
 
         try{
+            //1. Initializing GRB Model
             GRBModel model = new GRBModel(env);
 
             // Variáveis x_p: 1 se pedido p for selecionado
@@ -91,53 +204,21 @@ public class ChallengeSolver {
                 model.addConstr(demandExpr, GRB.LESS_EQUAL, supplyExpr, "cover_item_" + i);
             }
 
-            Double lambda = computeObjectiveFunction(solution);
+            while (MAX_RUNTIME - stopWatch.getTime(TimeUnit.SECONDS) > 1) {
 
-            int iteration = 0;
-            while (stopWatch.getTime(TimeUnit.SECONDS) < MAX_RUNTIME) {
-                iteration++;
+                solution = exploreWithALNS(solution, stopWatch, nThreads);
 
-                for (int p = 0; p < orders.size(); p++) {
-                    x[p].set(GRB.DoubleAttr.Start, solution.orders().contains(p) ? 1.0 : 0.0);
-                }
+                System.out.println("After ALNS: " + solution.objectiveValue + " In " + stopWatch.getTime(TimeUnit.SECONDS) + "s");
 
-                for (int c = 0; c < aisles.size(); c++) {
-                    y[c].set(GRB.DoubleAttr.Start, solution.aisles().contains(c) ? 1.0 : 0.0);
-                }
+                env.set(GRB.DoubleParam.TimeLimit, Math.min(MAX_RUNTIME - stopWatch.getTime(TimeUnit.SECONDS), 60.0));
 
-                //Parte de cima da fração
-                GRBLinExpr obj = new GRBLinExpr();
-                for (int p = 0; p < orders.size(); p++) {
-                    int totalItemsInOrder = orders.get(p).values().stream().mapToInt(Integer::intValue).sum();
-                    obj.addTerm(totalItemsInOrder, x[p]);
-                }
+                solution.objectiveValue = computeObjectiveFunction(solution);
 
-                //Parte de baixo da fração
-                for (int c = 0; c < aisles.size(); c++) {
-                    obj.addTerm(-lambda, y[c]);
-                }
+                solution = intensifyWithDinkelbach(model, x, y, solution, stopWatch, env);
 
-                model.setObjective(obj, GRB.MAXIMIZE);
+                solution.calcItemsLeftInAisles();
 
-                model.optimize();
-
-                if (model.get(GRB.IntAttr.SolCount) > 0) {
-
-                    solution = convertToChallengeSolution(x, y);
-
-                    if (model.get(GRB.DoubleAttr.ObjVal) < 1e-6) {
-                        break;
-                    }
-
-                    lambda = computeObjectiveFunction(solution);
-
-                    System.out.println("Iteração: " + iteration + " - lambda: " + lambda);
-
-                    model.getEnv().set(GRB.DoubleParam.TimeLimit, Math.min(MAX_RUNTIME - stopWatch.getTime(TimeUnit.SECONDS), MAX_RUNTIME/4));
-
-                } else {
-                    break;
-                }
+                System.out.println("After Dinkelbach: " + solution.objectiveValue + " In " + stopWatch.getTime(TimeUnit.SECONDS) + "s");
 
             }
 
@@ -147,14 +228,168 @@ public class ChallengeSolver {
             env.dispose();
         }
 
-        System.out.println("Solution is Feasible? " + isSolutionFeasible(solution));
-        System.out.println("Objective Value: " + computeObjectiveFunction(solution));
+        System.out.println("Is Feasible? " + isSolutionFeasible(solution));
+        LoggerUtils.appendColumnsToLine("results.log", solution.objectiveValue);
+
+        return new ChallengeSolution(new HashSet<>(solution.selectedOrders), new HashSet<>(solution.selectedAisles));
+    }
+
+    public ALNSSolution intensifyWithDinkelbach(GRBModel model, GRBVar[] x, GRBVar[] y, ALNSSolution solution, StopWatch stopWatch, GRBEnv env) throws GRBException {
+        double startTime = stopWatch.getTime(TimeUnit.SECONDS);
+
+        while (stopWatch.getTime(TimeUnit.SECONDS) - startTime < 60 && MAX_RUNTIME - stopWatch.getTime(TimeUnit.SECONDS) > 1) {
+
+            Set<Integer> processedOrders = new HashSet<>(solution.selectedOrders);
+            for (int p = 0; p < orders.size(); p++) {
+                x[p].set(GRB.DoubleAttr.Start, processedOrders.contains(p) ? 1.0 : 0.0);
+            }
+
+            Set<Integer> processedAisles = new HashSet<>(solution.selectedAisles);
+            for (int c = 0; c < aisles.size(); c++) {
+                y[c].set(GRB.DoubleAttr.Start, processedAisles.contains(c) ? 1.0 : 0.0);
+            }
+
+            //Parte de cima da fração
+            GRBLinExpr obj = new GRBLinExpr();
+            for (int p = 0; p < orders.size(); p++) {
+                int totalItemsInOrder = orders.get(p).values().stream().mapToInt(Integer::intValue).sum();
+                obj.addTerm(totalItemsInOrder, x[p]);
+            }
+
+            //Parte de baixo da fração
+            for (int c = 0; c < aisles.size(); c++) {
+                obj.addTerm(-solution.objectiveValue, y[c]);
+            }
+
+            model.setObjective(obj, GRB.MAXIMIZE);
+
+            env.set(GRB.DoubleParam.TimeLimit, Math.max(60.0 - (stopWatch.getTime(TimeUnit.SECONDS) - startTime), 0.0));
+
+            model.optimize();
+
+            if (model.get(GRB.IntAttr.SolCount) > 0) {
+
+                solution = convertToChallengeSolution(x, y);
+
+                solution.objectiveValue = computeObjectiveFunction(solution);
+
+                if (model.get(GRB.DoubleAttr.ObjVal) <= 1e-6) {
+                    break;
+                }
+
+            }
+        }
+
         return solution;
     }
 
-    private ChallengeSolution convertToChallengeSolution(GRBVar[] orderVars, GRBVar[] aisleVars) throws GRBException {
-        Set<Integer> selectedOrders = new HashSet<>();
-        Set<Integer> selectedAisles = new HashSet<>();
+    public ALNSSolution exploreWithALNS(ALNSSolution bestSolution, StopWatch stopWatch, int nThreads) throws Exception {
+        Random rng = new Random();
+
+        ALNSSolution currentSolution = new ALNSSolution(bestSolution);
+        ALNSSolution tempSolution;
+        int noImprovementIterations = 0;
+        Neighborhood lastNeighborhood = null;
+
+        ExecutorService executor = Executors.newFixedThreadPool(nThreads);
+
+        double startTime = stopWatch.getTime(TimeUnit.SECONDS);
+
+        while (stopWatch.getTime(TimeUnit.SECONDS) - startTime < 60 && MAX_RUNTIME - stopWatch.getTime(TimeUnit.SECONDS) > 1) {
+            noImprovementIterations++;
+
+            tempSolution = new ALNSSolution(currentSolution);
+
+            List<Neighborhood> neighborhoodList = new ArrayList<>();
+
+            for (int t = 0; t < nThreads; t++) {
+                neighborhoodList.add(selectNeighborhood(weightedNeighborhoods, lastNeighborhood));
+            }
+
+            List<Future<ALNSSolution>> futures = new ArrayList<>();
+
+            for (Neighborhood neigh : neighborhoodList) {
+                ALNSSolution solutionCopy = new ALNSSolution(currentSolution); // cópia independente
+                futures.add(executor.submit(() -> {
+                    neigh.move(solutionCopy, currentPercentage, randomFactor);
+                    return solutionCopy;
+                }));
+            }
+
+            ALNSSolution bestMoveCandidate = null;
+            Neighborhood bestNeighborhood = null;
+            double bestMoveSolution = Double.NEGATIVE_INFINITY;
+
+            for (int i = 0; i < futures.size(); i++) {
+                ALNSSolution candidate = futures.get(i).get();
+                if (candidate.objectiveValue > bestMoveSolution) {
+                    bestMoveSolution = candidate.objectiveValue;
+                    bestMoveCandidate = candidate;
+                    bestNeighborhood = neighborhoodList.get(i);
+                }
+            }
+
+            currentSolution = bestMoveCandidate;
+
+            if (currentSolution.objectiveValue > bestSolution.objectiveValue) {
+                bestSolution = new ALNSSolution(currentSolution);
+                noImprovementIterations = 0;
+
+                weightedNeighborhoods.merge(bestNeighborhood, 5.0, Double::sum);
+
+                if (lastNeighborhood != null) {
+                    int neighborhoodId = bestNeighborhood.id;
+                    HashMap<Neighborhood, Integer> neighFactor = bondingFactors.get(neighborhoodId);
+                    neighFactor.put(bestNeighborhood, Math.max(neighFactor.getOrDefault(bestNeighborhood, 0) + 1, 10));
+                }
+
+                lastNeighborhood = bestNeighborhood;
+            } else if (currentSolution.objectiveValue > tempSolution.objectiveValue) {
+                tempSolution = new ALNSSolution(currentSolution);
+
+                weightedNeighborhoods.merge(bestNeighborhood, 2.0, Double::sum);
+
+                lastNeighborhood = bestNeighborhood;
+            } else {
+                if (noImprovementIterations == maxNoImprovementIterations * 3) {
+                    switch (rng.nextInt(4)) {
+                        case 0:
+                            currentSolution = new ALNSSolution(bestSolution);
+                            break;
+
+                        case 1:
+                            currentSolution = getRandomSolution();
+                            break;
+
+                        case 2:
+                            currentSolution = getOppositeSolution(bestSolution);
+                            break;
+                        case 3:
+                            currentSolution = getHalfSolution(bestSolution);
+                            break;
+                    }
+                    noImprovementIterations = 0;
+                    lastNeighborhood = null;
+                } else {
+                    tempSolution = new ALNSSolution(currentSolution);
+                    lastNeighborhood = bestNeighborhood;
+                }   
+            }
+
+            currentPercentage = Math.min(maxPercentage,
+                    minPercentage + (noImprovementIterations / (maxNoImprovementIterations / (maxPercentage - minPercentage))));
+
+            evaporateWeights(weightedNeighborhoods);
+        }
+
+        executor.shutdown();
+
+        return bestSolution;
+    }
+
+    private ALNSSolution convertToChallengeSolution(GRBVar[] orderVars, GRBVar[] aisleVars) throws GRBException {
+        List<Integer> selectedOrders = new ArrayList<>();
+        List<Integer> selectedAisles = new ArrayList<>();
 
         for (int i = 0; i < orderVars.length; i++) {
             if (orderVars[i].get(GRB.DoubleAttr.X) > 0.5) {
@@ -168,12 +403,49 @@ public class ChallengeSolver {
             }
         }
 
-        return new ChallengeSolution(selectedOrders, selectedAisles);
+        return new ALNSSolution(selectedOrders, selectedAisles);
     }
 
-    private ChallengeSolution getInitialViableSolution() {
-        Set<Integer> selectedOrders = new HashSet<>();
-        Set<Integer> selectedAisles = new HashSet<>();
+    public void evaporateWeights(HashMap<Neighborhood, Double> neighborhoods) {
+        for (Map.Entry<Neighborhood, Double> entry : neighborhoods.entrySet()) {
+            neighborhoods.put(entry.getKey(), Math.max(1.0, entry.getValue() * 0.8));
+        }
+    }
+
+    public Neighborhood selectNeighborhood(
+        HashMap<Neighborhood, Double> neighborhoods,
+        Neighborhood lastNeighborhood) {
+
+        Map<Neighborhood, Double> effectiveWeights = new HashMap<>();
+        double totalWeight = 0.0;
+
+        for (Map.Entry<Neighborhood, Double> entry : neighborhoods.entrySet()) {
+            double weight = entry.getValue();
+            if (lastNeighborhood != null) {
+                weight += bondingFactors.get(entry.getKey().id).getOrDefault(lastNeighborhood, 0);
+            }
+            if (entry.getKey().equals(lastNeighborhood)) {
+                weight *= 0.2;
+            }
+
+            effectiveWeights.put(entry.getKey(), weight);
+            totalWeight += weight;
+        }
+
+        double r = Math.random() * totalWeight;
+        double cumulative = 0.0;
+
+        for (Map.Entry<Neighborhood, Double> entry : effectiveWeights.entrySet()) {
+            cumulative += entry.getValue();
+            if (r <= cumulative) return entry.getKey();
+        }
+
+        return neighborhoods.keySet().iterator().next();
+    }
+
+    private ALNSSolution getInitialViableSolution() {
+        List<Integer> selectedOrders = new ArrayList<>();
+        List<Integer> selectedAisles = new ArrayList<>();
         int totalItems = 0;
         HashMap<Integer, Integer> aisleCapacities = new HashMap<>();
 
@@ -216,16 +488,321 @@ public class ChallengeSolver {
             }
         }
 
-        return new ChallengeSolution(selectedOrders, selectedAisles);
+        ALNSSolution initialSolution = new ALNSSolution(selectedOrders, selectedAisles);
+        initialSolution.objectiveValue = computeObjectiveFunction(initialSolution);
+        initialSolution.calcItemsLeftInAisles();
+
+        return initialSolution;
     }
 
-    private GRBEnv initializeGrbEnv(StopWatch stopWatch) {
+    private ALNSSolution getRandomSolution() {
+        List<Integer> selectedOrders = new ArrayList<>();
+        List<Integer> selectedAisles = new ArrayList<>();
+
+        // Randomly select orders
+        for (int i = 0; i < orders.size(); i++) {
+            if (Math.random() < 0.5) {  
+                selectedOrders.add(i);
+            }
+        }
+
+        // Randomly select aisles
+        for (int i = 0; i < aisles.size(); i++) {
+            if (Math.random() < 0.5) { 
+                selectedAisles.add(i);
+            }
+        }
+
+        ALNSSolution randomSolution = new ALNSSolution(selectedOrders, selectedAisles);
+        
+        boolean feasible = isSolutionFeasible(randomSolution);
+        randomSolution.objectiveValue = feasible ? computeObjectiveFunction(randomSolution) : 0.0;
+        randomSolution.calcItemsLeftInAisles();
+
+        return randomSolution;
+    }
+
+    private ALNSSolution getOppositeSolution(ALNSSolution solution) {
+        List<Integer> selectedOrders = new ArrayList<>();
+        List<Integer> selectedAisles = new ArrayList<>();
+
+        Set<Integer> orderSet = new HashSet<>(solution.selectedOrders);
+        Set<Integer> aisleSet = new HashSet<>(solution.selectedAisles);
+
+        for (int i = 0; i < orders.size(); i++) {
+            if (!orderSet.contains(i)) {
+                selectedOrders.add(i);
+            }
+        }
+
+        for (int i = 0; i < aisles.size(); i++) {
+            if (!aisleSet.contains(i)) {
+                selectedAisles.add(i);
+            }
+        }
+
+        ALNSSolution oppositeSolution = new ALNSSolution(selectedOrders, selectedAisles);
+
+        boolean feasible = isSolutionFeasible(oppositeSolution);
+        oppositeSolution.objectiveValue = feasible ? computeObjectiveFunction(oppositeSolution) : 0.0;
+        oppositeSolution.calcItemsLeftInAisles();
+
+        return oppositeSolution;
+    }
+
+    private ALNSSolution getHalfSolution(ALNSSolution solution) {
+        List<Integer> selectedOrders = new ArrayList<>(solution.selectedOrders);
+        List<Integer> selectedAisles = new ArrayList<>(solution.selectedAisles);
+
+        Collections.shuffle(selectedOrders);
+        Collections.shuffle(selectedAisles);
+
+        selectedOrders = selectedOrders.subList(0, selectedOrders.size() / 2);
+        selectedAisles = selectedAisles.subList(0, selectedAisles.size() / 2);
+
+        ALNSSolution halfSolution = new ALNSSolution(selectedOrders, selectedAisles);
+
+        boolean feasible = isSolutionFeasible(halfSolution);
+        halfSolution.objectiveValue = feasible ? computeObjectiveFunction(halfSolution) : 0.0;
+        halfSolution.calcItemsLeftInAisles();
+
+        return halfSolution;
+    }
+
+    class Neighborhood {
+        public int id;
+
+        public void move(ALNSSolution currentSolution, double percentage, double randomFactor) {
+
+            if (!isSolutionFeasible(currentSolution)) {
+                currentSolution.objectiveValue = 0.0;
+                return;
+            }
+
+            double quality = computeObjectiveFunction(currentSolution);
+            currentSolution.objectiveValue = quality;
+        }
+    }
+
+    class RemoveRandomAisles extends Neighborhood {
+        public int id = 0;
+
+        @Override
+        public void move(ALNSSolution currentSolution, double percentage, double randomFactor) {
+            if (currentSolution.selectedAisles.size() <= 1) {
+                super.move(currentSolution, percentage, randomFactor);
+                return;
+            }
+
+            Collections.shuffle(currentSolution.selectedAisles, ThreadLocalRandom.current());
+
+            int nToRemove = (int) Math.ceil(currentSolution.selectedAisles.size() * (percentage / 100.0));
+            nToRemove = Math.max(1, nToRemove);
+
+            for (int i = 0; i < nToRemove; i++) {
+                int aisle = currentSolution.selectedAisles.remove(0);
+
+                for (Map.Entry<Integer, Integer> entry : aisles.get(aisle).entrySet()) {
+                    currentSolution.itensLeftInAisles.merge(entry.getKey(), -entry.getValue(), Integer::sum);
+                }
+            }
+
+            super.move(currentSolution, percentage, randomFactor);
+        }
+    }
+
+    class RemoveWorstAisles extends Neighborhood {
+        public int id = 1;
+
+        @Override
+        public void move(ALNSSolution currentSolution, double percentage, double randomFactor) {
+            if (currentSolution.selectedAisles.size() <= 1) {
+                super.move(currentSolution, percentage, randomFactor);
+                return;
+            }
+
+            Set<Integer> selectedSet = new HashSet<>(currentSolution.selectedAisles);
+            List<Integer> candidateAisles = bestAislesByItemNumber.stream()
+                .filter(a -> selectedSet.contains(a))
+                .collect(Collectors.toList());
+            Collections.reverse(candidateAisles);
+
+            int nToRemove = (int) Math.ceil(currentSolution.selectedAisles.size() * (percentage / 100.0));
+            nToRemove = Math.max(1, nToRemove);
+
+            for (int i = 0; nToRemove > 0 && i < candidateAisles.size(); i++) {
+                int aisle = candidateAisles.get(i);
+
+                if (ThreadLocalRandom.current().nextDouble() > randomFactor) continue;
+
+                currentSolution.selectedAisles.remove(Integer.valueOf(aisle));
+                nToRemove--;
+
+                for (Map.Entry<Integer, Integer> entry : aisles.get(aisle).entrySet()) {
+                    currentSolution.itensLeftInAisles.merge(entry.getKey(), -entry.getValue(), Integer::sum);
+                }
+            }
+
+            super.move(currentSolution, percentage, randomFactor);
+        }
+    }
+
+    class RemoveRandomOrders extends Neighborhood {
+        public int id = 2;
+
+        @Override
+        public void move(ALNSSolution currentSolution, double percentage, double randomFactor) {
+            if (currentSolution.selectedOrders.size() < 1) {
+                super.move(currentSolution, percentage, randomFactor);
+                return;
+            }
+
+            Collections.shuffle(currentSolution.selectedOrders, ThreadLocalRandom.current());
+
+            int nToRemove = (int) Math.ceil(currentSolution.selectedOrders.size() * (percentage / 100.0));
+            nToRemove = Math.max(1, nToRemove);
+
+            for (int i = 0; i < nToRemove; i++) {
+                int order = currentSolution.selectedOrders.remove(0);
+
+                for (Map.Entry<Integer, Integer> entry : orders.get(order).entrySet()) {
+                    currentSolution.itensLeftInAisles.merge(entry.getKey(), entry.getValue(), Integer::sum);
+                    currentSolution.totalItemsPicked -= entry.getValue();
+                }
+            }
+
+            super.move(currentSolution, percentage, randomFactor);
+        }
+    }
+
+    class RemoveWorstOrders extends Neighborhood {
+        public int id = 3;
+
+        @Override
+        public void move(ALNSSolution currentSolution, double percentage, double randomFactor) {
+            if (currentSolution.selectedOrders.size() < 1) {
+                super.move(currentSolution, percentage, randomFactor);
+                return;
+            }
+
+            Set<Integer> selectedSet = new HashSet<>(currentSolution.selectedOrders);
+            List<Integer> candidateOrders = bestOrdersByItemNumber.stream()
+                .filter(o -> selectedSet.contains(o))
+                .collect(Collectors.toList());
+            Collections.reverse(candidateOrders);
+
+            int nToRemove = (int) Math.ceil(currentSolution.selectedOrders.size() * (percentage / 100.0));
+            nToRemove = Math.max(1, nToRemove);
+
+            for (int i = 0; nToRemove > 0 && i < candidateOrders.size(); i++) {
+                int order = candidateOrders.get(i);
+
+                if (ThreadLocalRandom.current().nextDouble() > randomFactor) continue;
+
+                currentSolution.selectedOrders.remove(Integer.valueOf(order));
+                nToRemove--;
+
+                for (Map.Entry<Integer, Integer> entry : orders.get(order).entrySet()) {
+                    currentSolution.itensLeftInAisles.merge(entry.getKey(), entry.getValue(), Integer::sum);
+                    currentSolution.totalItemsPicked -= entry.getValue();
+                }
+            }
+
+            super.move(currentSolution, percentage, randomFactor);
+        }
+    }
+
+    class AddBestOrders extends Neighborhood {
+        public int id = 4;
+
+        @Override
+        public void move(ALNSSolution currentSolution, double percentage, double randomFactor) {
+            Set<Integer> selectedSet = new HashSet<>(currentSolution.selectedOrders);
+            List<Integer> candidateOrders = bestOrdersByItemNumber.stream()
+                .filter(o -> !selectedSet.contains(o))
+                .collect(Collectors.toList());
+
+            if (candidateOrders.isEmpty()) {
+                super.move(currentSolution, percentage, randomFactor);
+                return;
+            }
+
+            for (int order : candidateOrders) {
+                Map<Integer, Integer> orderItems = orders.get(order);
+                int orderTotalItems = orderItems.values().stream().mapToInt(Integer::intValue).sum();
+
+                if (currentSolution.totalItemsPicked + orderTotalItems > waveSizeUB) {
+                    continue;
+                }
+
+                boolean canFulfill = true;
+                for (Map.Entry<Integer, Integer> entry : orderItems.entrySet()) {
+                    int itemIndex = entry.getKey();
+                    int itemQuantity = entry.getValue();
+                    if (currentSolution.itensLeftInAisles.getOrDefault(itemIndex, 0) < itemQuantity) {
+                        canFulfill = false;
+                        break;
+                    }
+                }
+
+                if (canFulfill && ThreadLocalRandom.current().nextDouble() < randomFactor) {
+                    currentSolution.selectedOrders.add(order);
+                    currentSolution.totalItemsPicked += orderTotalItems;
+                    for (Map.Entry<Integer, Integer> entry : orderItems.entrySet()) {
+                        int itemIndex = entry.getKey();
+                        int itemQuantity = entry.getValue();
+                        currentSolution.itensLeftInAisles.merge(itemIndex, -itemQuantity, Integer::sum);
+                    }
+                }
+            }
+
+            super.move(currentSolution, percentage, randomFactor);
+        }
+    }
+
+    class AddBestAisles extends Neighborhood {
+        public int id = 5;
+
+        @Override
+        public void move(ALNSSolution currentSolution, double percentage, double randomFactor) {
+            Set<Integer> selectedSet = new HashSet<>(currentSolution.selectedAisles);
+            List<Integer> candidateAisles = bestAislesByItemNumber.stream()
+                .filter(a -> !selectedSet.contains(a))
+                .collect(Collectors.toList());
+
+            if (candidateAisles.isEmpty()) {
+                super.move(currentSolution, percentage, randomFactor);
+                return;
+            }
+
+            boolean valid = false;
+
+            for (int aisle : candidateAisles) {
+                if (ThreadLocalRandom.current().nextDouble() < randomFactor) {
+                    currentSolution.selectedAisles.add(aisle);
+                    for (Map.Entry<Integer, Integer> entry : aisles.get(aisle).entrySet()) {
+                        currentSolution.itensLeftInAisles.merge(entry.getKey(), entry.getValue(), Integer::sum);
+                    }
+                }
+
+                if (valid && ThreadLocalRandom.current().nextDouble() < randomFactor) {
+                    break;
+                } else if (currentSolution.itensLeftInAisles.values().stream().allMatch(v -> v >= 0)) {
+                    valid = true;
+                }
+            }
+
+            super.move(currentSolution, percentage, randomFactor);
+        }
+    }
+
+    private GRBEnv initializeGrbEnv(StopWatch stopWatch, int nThreads) {
         try {
             GRBEnv env = new GRBEnv(true);
             env.set("logFile", "mip1.log");
-            env.set(GRB.DoubleParam.TimeLimit, Math.min(MAX_RUNTIME - stopWatch.getTime(TimeUnit.SECONDS), MAX_RUNTIME/4));
+            env.set(GRB.DoubleParam.TimeLimit, 60.0);
             env.set(GRB.IntParam.LogToConsole, 0);
-            env.set(GRB.IntParam.Threads, 1);
+            env.set(GRB.IntParam.Threads, nThreads);
             env.start();
             return env;
         } catch (GRBException e) {
@@ -244,9 +821,9 @@ public class ChallengeSolver {
                 0);
     }
 
-    protected boolean isSolutionFeasible(ChallengeSolution challengeSolution) {
-        Set<Integer> selectedOrders = challengeSolution.orders();
-        Set<Integer> visitedAisles = challengeSolution.aisles();
+    protected boolean isSolutionFeasible(ALNSSolution challengeSolution) {
+        List<Integer> selectedOrders = challengeSolution.selectedOrders;
+        List<Integer> visitedAisles = challengeSolution.selectedAisles;
         if (selectedOrders == null || visitedAisles == null || selectedOrders.isEmpty() || visitedAisles.isEmpty()) {
             return false;
         }
@@ -271,14 +848,12 @@ public class ChallengeSolver {
         // Check if the total units picked are within bounds
         int totalUnits = Arrays.stream(totalUnitsPicked).sum();
         if (totalUnits < waveSizeLB || totalUnits > waveSizeUB) {
-            System.out.println("Total units picked out of bounds");
             return false;
         }
 
         // Check if the units picked do not exceed the units available
         for (int i = 0; i < nItems; i++) {
             if (totalUnitsPicked[i] > totalUnitsAvailable[i]) {
-                System.out.println("Total units picked exceed available units");
                 return false;
             }
         }
@@ -286,9 +861,9 @@ public class ChallengeSolver {
         return true;
     }
 
-    protected double computeObjectiveFunction(ChallengeSolution challengeSolution) {
-        Set<Integer> selectedOrders = challengeSolution.orders();
-        Set<Integer> visitedAisles = challengeSolution.aisles();
+    protected double computeObjectiveFunction(ALNSSolution challengeSolution) {
+        List<Integer> selectedOrders = challengeSolution.selectedOrders;
+        List<Integer> visitedAisles = challengeSolution.selectedAisles;
         if (selectedOrders == null || visitedAisles == null || selectedOrders.isEmpty() || visitedAisles.isEmpty()) {
             return 0.0;
         }
