@@ -44,6 +44,7 @@ public class ChallengeSolver {
             put(new AddBestOrders(), 1.0);
             put(new RemoveRandomOrders(), 1.0);
             put(new RemoveWorstOrders(), 1.0);
+            put(new RemoveOrdersAndAisles(), 1.0);
     }};
 
     protected List<HashMap<Neighborhood, Integer>> bondingFactors = new ArrayList<>();
@@ -51,7 +52,7 @@ public class ChallengeSolver {
     protected List<Integer> bestOrdersByItemNumber = new ArrayList<>();
     protected List<Integer> bestAislesByItemNumber = new ArrayList<>();
 
-    protected final int nThreads = 8;
+    protected final int nThreads = 4;
 
 
     public ChallengeSolver(
@@ -201,7 +202,7 @@ public class ChallengeSolver {
                     neighFactor.put(bestNeighborhood, Math.max(neighFactor.getOrDefault(bestNeighborhood, 0) + 1, 10));
                 }
 
-                System.out.println("New best solution in iteration " + iteration + ": " + bestSolution.objectiveValue);
+                //System.out.println("New best solution in iteration " + iteration + ": " + bestSolution.objectiveValue);
                 lastNeighborhood = bestNeighborhood;
             } else if (currentSolution.objectiveValue > tempSolution.objectiveValue) {
                 tempSolution = new ALNSSolution(currentSolution);
@@ -211,7 +212,7 @@ public class ChallengeSolver {
                 lastNeighborhood = bestNeighborhood;
             } else {
                 if (noImprovementIterations == maxNoImprovementIterations * 3) {
-                    switch (rng.nextInt(4)) {
+                    switch (rng.nextInt(3)) {
                         case 0:
                             currentSolution = new ALNSSolution(bestSolution);
                             break;
@@ -222,9 +223,6 @@ public class ChallengeSolver {
 
                         case 2:
                             currentSolution = getOppositeSolution(bestSolution);
-                            break;
-                        case 3:
-                            currentSolution = getHalfSolution(bestSolution);
                             break;
                     }
                     noImprovementIterations = 0;
@@ -244,6 +242,7 @@ public class ChallengeSolver {
         executor.shutdown();
 
         System.out.println(bestSolution.objectiveValue);
+        System.out.println("iterações: " + iteration);
 
         return new ChallengeSolution(new HashSet<>(bestSolution.selectedOrders), new HashSet<>(bestSolution.selectedAisles));
     }
@@ -639,6 +638,50 @@ public class ChallengeSolver {
         }
     }
     
+    class RemoveOrdersAndAisles extends Neighborhood {
+        public int id = 6;
+
+        @Override
+        public void move(ALNSSolution currentSolution, double percentage, double randomFactor) {
+            if (currentSolution.selectedAisles.size() <= 1 && currentSolution.selectedOrders.isEmpty()) {
+                super.move(currentSolution, percentage, randomFactor);
+                return;
+            }
+
+            if (!currentSolution.selectedAisles.isEmpty()) {
+                Collections.shuffle(currentSolution.selectedAisles, ThreadLocalRandom.current());
+
+                int nToRemoveAisles = (int) Math.ceil(currentSolution.selectedAisles.size() * (percentage / 100.0));
+                nToRemoveAisles = Math.max(1, nToRemoveAisles);
+
+                for (int i = 0; i < nToRemoveAisles && !currentSolution.selectedAisles.isEmpty(); i++) {
+                    int aisle = currentSolution.selectedAisles.remove(0);
+
+                    for (Map.Entry<Integer, Integer> entry : aisles.get(aisle).entrySet()) {
+                        currentSolution.itensLeftInAisles.merge(entry.getKey(), -entry.getValue(), Integer::sum);
+                    }
+                }
+            }
+
+            if (!currentSolution.selectedOrders.isEmpty()) {
+                Collections.shuffle(currentSolution.selectedOrders, ThreadLocalRandom.current());
+
+                int nToRemoveOrders = (int) Math.ceil(currentSolution.selectedOrders.size() * (percentage / 100.0));
+                nToRemoveOrders = Math.max(1, nToRemoveOrders);
+
+                for (int i = 0; i < nToRemoveOrders && !currentSolution.selectedOrders.isEmpty(); i++) {
+                    int order = currentSolution.selectedOrders.remove(0);
+
+                    for (Map.Entry<Integer, Integer> entry : orders.get(order).entrySet()) {
+                        currentSolution.itensLeftInAisles.merge(entry.getKey(), entry.getValue(), Integer::sum);
+                        currentSolution.totalItemsPicked -= entry.getValue();
+                    }
+                }
+            }
+
+            super.move(currentSolution, percentage, randomFactor);
+        }
+    }
 
     
     /*

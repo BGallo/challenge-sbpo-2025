@@ -113,10 +113,10 @@ public class Challenge {
         // Start the stopwatch to track the running time
         StopWatch stopWatch = StopWatch.createStarted();
 
-        double maxPercentage = Double.parseDouble(args[2]);
-        double minPercentage = Double.parseDouble(args[3]);
-        int maxNoImprovementIterations = Integer.parseInt(args[4]);
-        double randomFactor = Double.parseDouble(args[5]);
+        double maxPercentage = 67.0214;
+        double minPercentage = 22.0642;
+        int maxNoImprovementIterations = 400;
+        double randomFactor = 0.8897;
 
         Challenge challenge = new Challenge();
         challenge.readInput(args[0]);
