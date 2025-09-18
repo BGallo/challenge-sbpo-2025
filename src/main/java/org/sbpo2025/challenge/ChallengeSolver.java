@@ -31,8 +31,8 @@ public class ChallengeSolver {
         this.waveSizeUB = waveSizeUB;
     }
 
-    public ChallengeSolution solve(StopWatch stopWatch) throws GRBException {
-        GRBEnv env = initializeGrbEnv(stopWatch);
+    public ChallengeSolution solve(StopWatch stopWatch, int nThreads) throws GRBException {
+        GRBEnv env = initializeGrbEnv(stopWatch, nThreads);
         if (env == null) {
             return null;
         }
@@ -133,7 +133,11 @@ public class ChallengeSolver {
 
                     System.out.println("Iteração: " + iteration + " - lambda: " + lambda);
 
-                    model.getEnv().set(GRB.DoubleParam.TimeLimit, Math.min(MAX_RUNTIME - stopWatch.getTime(TimeUnit.SECONDS), MAX_RUNTIME/4));
+                    if (MAX_RUNTIME - stopWatch.getTime(TimeUnit.SECONDS) < 0.5) {
+                        break;
+                    }
+
+                    model.getEnv().set(GRB.DoubleParam.TimeLimit, Math.min(MAX_RUNTIME - stopWatch.getTime(TimeUnit.SECONDS), MAX_RUNTIME/2));
 
                 } else {
                     break;
@@ -219,13 +223,13 @@ public class ChallengeSolver {
         return new ChallengeSolution(selectedOrders, selectedAisles);
     }
 
-    private GRBEnv initializeGrbEnv(StopWatch stopWatch) {
+    private GRBEnv initializeGrbEnv(StopWatch stopWatch, int nThreads) {
         try {
             GRBEnv env = new GRBEnv(true);
             env.set("logFile", "mip1.log");
-            env.set(GRB.DoubleParam.TimeLimit, Math.min(MAX_RUNTIME - stopWatch.getTime(TimeUnit.SECONDS), MAX_RUNTIME/4));
+            env.set(GRB.DoubleParam.TimeLimit, Math.min(MAX_RUNTIME - stopWatch.getTime(TimeUnit.SECONDS), MAX_RUNTIME/2));
             env.set(GRB.IntParam.LogToConsole, 0);
-            env.set(GRB.IntParam.Threads, 1);
+            env.set(GRB.IntParam.Threads, nThreads);
             env.start();
             return env;
         } catch (GRBException e) {

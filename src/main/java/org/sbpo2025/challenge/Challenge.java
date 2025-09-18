@@ -114,16 +114,14 @@ public class Challenge {
         // Start the stopwatch to track the running time
         StopWatch stopWatch = StopWatch.createStarted();
 
-        if (args.length != 2) {
-            System.out.println("Usage: java -jar target/ChallengeSBPO2025-1.0.jar <inputFilePath> <outputFilePath>");
-            return;
-        }
-
         Challenge challenge = new Challenge();
         challenge.readInput(args[0]);
+
+        int nThreads = Integer.parseInt(args[2]);
+
         var challengeSolver = new ChallengeSolver(
                 challenge.orders, challenge.aisles, challenge.nItems, challenge.waveSizeLB, challenge.waveSizeUB);
-        ChallengeSolution challengeSolution = challengeSolver.solve(stopWatch);
+        ChallengeSolution challengeSolution = challengeSolver.solve(stopWatch, nThreads);
 
         challenge.writeOutput(challengeSolution, args[1]);
 
