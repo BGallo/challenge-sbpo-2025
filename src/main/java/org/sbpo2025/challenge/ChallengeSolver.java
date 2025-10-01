@@ -185,7 +185,6 @@ public class ChallengeSolver {
 
                 lastNeighborhood = neigh;
             } else if (currentSolution.objectiveValue > tempSolution.objectiveValue) {
-                tempSolution = new ALNSSolution(currentSolution);
 
                 weightedNeighborhoods.merge(neigh, 2.0, Double::sum);
 
