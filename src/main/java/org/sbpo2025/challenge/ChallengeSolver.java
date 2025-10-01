@@ -166,37 +166,30 @@ public class ChallengeSolver {
 
             tempSolution = new ALNSSolution(currentSolution);
 
-            Neighborhood bestNeighborhood = null;
-
             Neighborhood neigh = selectNeighborhood(weightedNeighborhoods, lastNeighborhood);
 
-            ALNSSolution candidate = new ALNSSolution(currentSolution);
-
-            neigh.move(candidate, currentPercentage, randomFactor);
-
-            currentSolution = candidate;
-            bestNeighborhood = neigh;
+            neigh.move(currentSolution, currentPercentage, randomFactor);
 
 
             if (currentSolution.objectiveValue > bestSolution.objectiveValue) {
                 bestSolution = new ALNSSolution(currentSolution);
                 noImprovementIterations = 0;
 
-                weightedNeighborhoods.merge(bestNeighborhood, 5.0, Double::sum);
+                weightedNeighborhoods.merge(neigh, 5.0, Double::sum);
 
                 if (lastNeighborhood != null) {
-                    int neighborhoodId = bestNeighborhood.id;
+                    int neighborhoodId = neigh.id;
                     HashMap<Neighborhood, Integer> neighFactor = bondingFactors.get(neighborhoodId);
-                    neighFactor.put(bestNeighborhood, Math.max(neighFactor.getOrDefault(bestNeighborhood, 0) + 1, 10));
+                    neighFactor.put(lastNeighborhood, Math.max(neighFactor.getOrDefault(lastNeighborhood, 0) + 1, 10));
                 }
 
-                lastNeighborhood = bestNeighborhood;
+                lastNeighborhood = neigh;
             } else if (currentSolution.objectiveValue > tempSolution.objectiveValue) {
                 tempSolution = new ALNSSolution(currentSolution);
 
-                weightedNeighborhoods.merge(bestNeighborhood, 2.0, Double::sum);
+                weightedNeighborhoods.merge(neigh, 2.0, Double::sum);
 
-                lastNeighborhood = bestNeighborhood;
+                lastNeighborhood = neigh;
             } else {
                 if (noImprovementIterations == maxNoImprovementIterations * 3) {
                     switch (rng.nextInt(3)) {
@@ -215,8 +208,8 @@ public class ChallengeSolver {
                     noImprovementIterations = 0;
                     lastNeighborhood = null;
                 } else {
-                    tempSolution = new ALNSSolution(currentSolution);
-                    lastNeighborhood = bestNeighborhood;
+                    //tempSolution = new ALNSSolution(currentSolution);
+                    lastNeighborhood = neigh;
                 }   
             }
 
@@ -255,31 +248,26 @@ public class ChallengeSolver {
 
                     tempSolution = new ALNSSolution(currentSolution);
 
-                    Neighborhood bestNeighborhood = null;
                     Neighborhood neigh = selectNeighborhood(weightedNeighborhoods, lastNeighborhood);
 
-                    ALNSSolution candidate = new ALNSSolution(currentSolution);
-                    neigh.move(candidate, currentPercentage, randomFactor);
-
-                    currentSolution = candidate;
-                    bestNeighborhood = neigh;
+                    neigh.move(currentSolution, currentPercentage, randomFactor);
 
                     if (currentSolution.objectiveValue > bestSolution.objectiveValue) {
                         bestSolution = new ALNSSolution(currentSolution);
                         noImprovementIterations = 0;
 
-                        weightedNeighborhoods.merge(bestNeighborhood, 5.0, Double::sum);
+                        weightedNeighborhoods.merge(neigh, 5.0, Double::sum);
 
                         if (lastNeighborhood != null) {
-                            int neighborhoodId = bestNeighborhood.id;
+                            int neighborhoodId = neigh.id;
                             HashMap<Neighborhood, Integer> neighFactor = bondingFactors.get(neighborhoodId);
-                            neighFactor.put(bestNeighborhood, Math.max(neighFactor.getOrDefault(bestNeighborhood, 0) + 1, 10));
+                            neighFactor.put(lastNeighborhood, Math.max(neighFactor.getOrDefault(lastNeighborhood, 0) + 1, 10));
                         }
-                        lastNeighborhood = bestNeighborhood;
+                        lastNeighborhood = neigh;
                     } else if (currentSolution.objectiveValue > tempSolution.objectiveValue) {
                         tempSolution = new ALNSSolution(currentSolution);
-                        weightedNeighborhoods.merge(bestNeighborhood, 2.0, Double::sum);
-                        lastNeighborhood = bestNeighborhood;
+                        weightedNeighborhoods.merge(neigh, 2.0, Double::sum);
+                        lastNeighborhood = neigh;
                     } else {
                         if (noImprovementIterations == maxNoImprovementIterations * 3) {
                             switch (rng.nextInt(3)) {
@@ -291,7 +279,7 @@ public class ChallengeSolver {
                             lastNeighborhood = null;
                         } else {
                             tempSolution = new ALNSSolution(currentSolution);
-                            lastNeighborhood = bestNeighborhood;
+                            lastNeighborhood = neigh;
                         }
                     }
 
