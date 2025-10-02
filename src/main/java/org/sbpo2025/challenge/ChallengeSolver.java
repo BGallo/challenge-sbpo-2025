@@ -91,7 +91,7 @@ public class ChallengeSolver {
 
         long startTime = System.currentTimeMillis();
 
-        RVNDSolution bestSolution = constructGreedyRandomizedSolution(alpha);
+        RVNDSolution bestSolution = constructGreedyRandomizedFastSolution(alpha, stopWatch);
         double bestQuality = computeObjectiveFunction(decodeRVNDSolution(bestSolution));
 
         System.out.println("Initial Solution with quality: " + bestQuality);
@@ -105,7 +105,7 @@ public class ChallengeSolver {
 
             /* System.out.println("Iteration " + currentIteration); */
 
-            RVNDSolution currentSolution = currentIteration % 3 == 0 ? constructGreedyRandomizedSolution(alpha) : bestSolution;
+            RVNDSolution currentSolution = currentIteration % 3 == 0 ? constructGreedyRandomizedFastSolution(alpha, stopWatch) : bestSolution;
             double currentQuality = bestQuality;
 
             currentSolution = randomVariableNeighborhoodDescent(currentSolution, currentQuality);
@@ -129,11 +129,88 @@ public class ChallengeSolver {
             System.out.println("É viável: " + isSolutionFeasible(bestSolution, true));
             /* System.out.println("Solution: " + bestSolution); */
         }
-
+        System.out.println("iterações: " + currentIteration);
        /*  String formattedNumber = String.format("%.3f", graspFitness);
         writeNumberToFile(formattedNumber, "number_output.txt");  */  
 
         return new ChallengeSolution(new HashSet<>(bestSolution.orders()), new HashSet<>(bestSolution.aisles()));
+    }
+    private RVNDSolution constructGreedyRandomizedFastSolution(double alpha, StopWatch stopWatch) {
+            Random rand = new Random();
+    
+            Set<Integer> selectedOrders = new HashSet<>();
+            Set<Integer> selectedAisles = new HashSet<>();
+    
+            for (int i = 0; i < aisles.size(); i++) {
+                selectedAisles.add(i);
+            }
+    
+            Map<Integer, Integer> availableItems = new HashMap<>();
+            for (Map<Integer, Integer> aisle : aisles) {
+                for (Map.Entry<Integer, Integer> entry : aisle.entrySet()) {
+                    int item = entry.getKey();
+                    int qty = entry.getValue();
+                    availableItems.put(item, availableItems.getOrDefault(item, 0) + qty);
+                }
+            }
+
+            List<Integer> candidateOrders = new ArrayList<>();
+            Map<Integer, Integer> orderItemCount = new HashMap<>();
+            for (int i = 0; i < orders.size(); i++) {
+                int totalItems = orders.get(i).values().stream().mapToInt(Integer::intValue).sum();
+                orderItemCount.put(i, totalItems);
+                candidateOrders.add(i);
+            }
+    
+            int totalSelectedItems = 0;
+            List<Integer> RCL = buildRCL(candidateOrders, orderItemCount, alpha);
+    
+            while (!candidateOrders.isEmpty()) {
+                if (RCL.isEmpty()) {
+                    int maxItems = candidateOrders.stream().mapToInt(orderItemCount::get).max().orElse(0);
+                    int minItems = candidateOrders.stream().mapToInt(orderItemCount::get).min().orElse(0);
+                    double threshold = maxItems - alpha * (maxItems - minItems);
+                    RCL = candidateOrders.stream()
+                            .filter(order -> orderItemCount.get(order) >= threshold)
+                            .collect(Collectors.toList());
+                }
+
+                if (RCL.isEmpty()) break;
+
+                int selectedOrder = RCL.remove(rand.nextInt(RCL.size()));
+                int selectedOrderItems = orderItemCount.get(selectedOrder);
+
+                if (totalSelectedItems + selectedOrderItems > waveSizeUB) {
+                    candidateOrders.remove(Integer.valueOf(selectedOrder));
+                    continue;
+                }
+
+                Map<Integer, Integer> order = orders.get(selectedOrder);
+                boolean canAdd = true;
+                for (Map.Entry<Integer, Integer> entry : order.entrySet()) {
+                    int item = entry.getKey();
+                    int needed = entry.getValue();
+                    if (availableItems.getOrDefault(item, 0) < needed) {
+                        canAdd = false;
+                        break;
+                    }
+                }
+
+                if (canAdd) {
+                    for (Map.Entry<Integer, Integer> entry : order.entrySet()) {
+                        int item = entry.getKey();
+                        int needed = entry.getValue();
+                        availableItems.put(item, availableItems.get(item) - needed);
+                    }
+                    selectedOrders.add(selectedOrder);
+                    totalSelectedItems += selectedOrderItems;
+                }
+
+                candidateOrders.remove(Integer.valueOf(selectedOrder));
+            }
+
+
+        return new RVNDSolution(new ArrayList<>(selectedOrders), new ArrayList<>(selectedAisles));
     }
 
     private RVNDSolution constructGreedyRandomizedSolution(double alpha) {
