@@ -14,6 +14,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -43,17 +44,6 @@ public class ChallengeSolver {
 
     protected double randomFactor;
 
-    protected HashMap<Neighborhood, Double> weightedNeighborhoods = new HashMap<>() {{
-            put(new AddBestAisles(), 1.0);
-            put(new RemoveRandomAisles(), 1.0);
-            put(new RemoveWorstAisles(), 1.0);
-            put(new AddBestOrders(), 1.0);
-            put(new RemoveRandomOrders(), 1.0);
-            put(new RemoveWorstOrders(), 1.0);
-    }};
-
-    protected List<HashMap<Neighborhood, Integer>> bondingFactors = new ArrayList<>();
-
     protected List<Integer> bestOrdersByItemNumber = new ArrayList<>();
     protected List<Integer> bestAislesByItemNumber = new ArrayList<>();
 
@@ -69,10 +59,6 @@ public class ChallengeSolver {
         this.currentPercentage = minPercentage;
         this.maxNoImprovementIterations = maxNoImprovementIterations;
         this.randomFactor = randomFactor;
-
-        for (int i = 0; i < 6; i++) {
-            bondingFactors.add(new HashMap<>());
-        }
 
         bestOrdersByItemNumber = IntStream.range(0, orders.size())
             .boxed()
@@ -210,9 +196,9 @@ public class ChallengeSolver {
 
                 System.out.println("After ALNS: " + solution.objectiveValue + " In " + stopWatch.getTime(TimeUnit.SECONDS) + "s");
 
-                env.set(GRB.DoubleParam.TimeLimit, Math.min(MAX_RUNTIME - stopWatch.getTime(TimeUnit.SECONDS), 60.0));
-
                 solution.objectiveValue = computeObjectiveFunction(solution);
+
+                model.getEnv().set(GRB.DoubleParam.TimeLimit, Math.min(MAX_RUNTIME - stopWatch.getTime(TimeUnit.SECONDS), 60.0));
 
                 solution = intensifyWithDinkelbach(model, x, y, solution, stopWatch, env);
 
@@ -263,8 +249,6 @@ public class ChallengeSolver {
 
             model.setObjective(obj, GRB.MAXIMIZE);
 
-            env.set(GRB.DoubleParam.TimeLimit, Math.max(60.0 - (stopWatch.getTime(TimeUnit.SECONDS) - startTime), 0.0));
-
             model.optimize();
 
             if (model.get(GRB.IntAttr.SolCount) > 0) {
@@ -284,107 +268,112 @@ public class ChallengeSolver {
     }
 
     public ALNSSolution exploreWithALNS(ALNSSolution bestSolution, StopWatch stopWatch, int nThreads) throws Exception {
-        Random rng = new Random();
-
-        ALNSSolution currentSolution = new ALNSSolution(bestSolution);
-        ALNSSolution tempSolution;
-        int noImprovementIterations = 0;
-        Neighborhood lastNeighborhood = null;
-
         ExecutorService executor = Executors.newFixedThreadPool(nThreads);
+        AtomicReference<ALNSSolution> globalBest = new AtomicReference<>(bestSolution);
+        List<Future<ALNSSolution>> futures = new ArrayList<>();
 
-        double startTime = stopWatch.getTime(TimeUnit.SECONDS);
+        int migrationInterval = 100;
 
-        while (stopWatch.getTime(TimeUnit.SECONDS) - startTime < 60 && MAX_RUNTIME - stopWatch.getTime(TimeUnit.SECONDS) > 1) {
-            noImprovementIterations++;
+        for (int t = 0; t < nThreads; t++) {
+            futures.add(executor.submit(() -> {
+                Random rng = new Random();
 
-            tempSolution = new ALNSSolution(currentSolution);
+                HashMap<Neighborhood, Double> weightedNeighborhoods = new HashMap<>() {{
+                    put(new AddBestAisles(), 1.0);
+                    put(new RemoveRandomAisles(), 1.0);
+                    put(new RemoveWorstAisles(), 1.0);
+                    put(new AddBestOrders(), 1.0);
+                    put(new RemoveRandomOrders(), 1.0);
+                    put(new RemoveWorstOrders(), 1.0);
+                    put(new RemoveOrdersAndAisles(), 1.0);
+                }};
 
-            List<Neighborhood> neighborhoodList = new ArrayList<>();
+                List<HashMap<Neighborhood, Integer>> bondingFactors = new ArrayList<>();
 
-            for (int t = 0; t < nThreads; t++) {
-                neighborhoodList.add(selectNeighborhood(weightedNeighborhoods, lastNeighborhood));
-            }
-
-            List<Future<ALNSSolution>> futures = new ArrayList<>();
-
-            for (Neighborhood neigh : neighborhoodList) {
-                ALNSSolution solutionCopy = new ALNSSolution(currentSolution); // cópia independente
-                futures.add(executor.submit(() -> {
-                    neigh.move(solutionCopy, currentPercentage, randomFactor);
-                    return solutionCopy;
-                }));
-            }
-
-            ALNSSolution bestMoveCandidate = null;
-            Neighborhood bestNeighborhood = null;
-            double bestMoveSolution = Double.NEGATIVE_INFINITY;
-
-            for (int i = 0; i < futures.size(); i++) {
-                ALNSSolution candidate = futures.get(i).get();
-                if (candidate.objectiveValue > bestMoveSolution) {
-                    bestMoveSolution = candidate.objectiveValue;
-                    bestMoveCandidate = candidate;
-                    bestNeighborhood = neighborhoodList.get(i);
-                }
-            }
-
-            currentSolution = bestMoveCandidate;
-
-            if (currentSolution.objectiveValue > bestSolution.objectiveValue) {
-                bestSolution = new ALNSSolution(currentSolution);
-                noImprovementIterations = 0;
-
-                weightedNeighborhoods.merge(bestNeighborhood, 5.0, Double::sum);
-
-                if (lastNeighborhood != null) {
-                    int neighborhoodId = bestNeighborhood.id;
-                    HashMap<Neighborhood, Integer> neighFactor = bondingFactors.get(neighborhoodId);
-                    neighFactor.put(bestNeighborhood, Math.max(neighFactor.getOrDefault(bestNeighborhood, 0) + 1, 10));
+                for (int i = 0; i < 6; i++) {
+                    bondingFactors.add(new HashMap<>());
                 }
 
-                lastNeighborhood = bestNeighborhood;
-            } else if (currentSolution.objectiveValue > tempSolution.objectiveValue) {
-                tempSolution = new ALNSSolution(currentSolution);
+                int beginning = (int) stopWatch.getTime(TimeUnit.SECONDS);
 
-                weightedNeighborhoods.merge(bestNeighborhood, 2.0, Double::sum);
+                ALNSSolution localBestSolution = new ALNSSolution(globalBest.get());
+                ALNSSolution currentSolution = new ALNSSolution(localBestSolution);
+                ALNSSolution tempSolution;
+                int iteration = 0;
+                int noImprovementIterations = 0;
+                Neighborhood lastNeighborhood = null;
 
-                lastNeighborhood = bestNeighborhood;
-            } else {
-                if (noImprovementIterations == maxNoImprovementIterations * 3) {
-                    switch (rng.nextInt(4)) {
-                        case 0:
-                            currentSolution = new ALNSSolution(bestSolution);
-                            break;
+                while (stopWatch.getTime(TimeUnit.SECONDS) - beginning < 59 && MAX_RUNTIME - stopWatch.getTime(TimeUnit.SECONDS) > 1) {
+                    iteration++;
+                    noImprovementIterations++;
 
-                        case 1:
-                            currentSolution = getRandomSolution();
-                            break;
-
-                        case 2:
-                            currentSolution = getOppositeSolution(bestSolution);
-                            break;
-                        case 3:
-                            currentSolution = getHalfSolution(bestSolution);
-                            break;
-                    }
-                    noImprovementIterations = 0;
-                    lastNeighborhood = null;
-                } else {
                     tempSolution = new ALNSSolution(currentSolution);
-                    lastNeighborhood = bestNeighborhood;
-                }   
+
+                    Neighborhood neigh = selectNeighborhood(weightedNeighborhoods, bondingFactors, lastNeighborhood);
+
+                    neigh.move(currentSolution, currentPercentage, randomFactor);
+
+                    if (currentSolution.objectiveValue > localBestSolution.objectiveValue) {
+                        localBestSolution = new ALNSSolution(currentSolution);
+                        noImprovementIterations = 0;
+
+                        weightedNeighborhoods.merge(neigh, 5.0, Double::sum);
+
+                        if (lastNeighborhood != null) {
+                            int neighborhoodId = neigh.id;
+                            HashMap<Neighborhood, Integer> neighFactor = bondingFactors.get(neighborhoodId);
+                            neighFactor.put(lastNeighborhood, Math.max(neighFactor.getOrDefault(lastNeighborhood, 0) + 1, 10));
+                        }
+                        lastNeighborhood = neigh;
+                    } else if (currentSolution.objectiveValue > tempSolution.objectiveValue) {
+                        tempSolution = new ALNSSolution(currentSolution);
+                        weightedNeighborhoods.merge(neigh, 2.0, Double::sum);
+                        lastNeighborhood = neigh;
+                    } else {
+                        if (noImprovementIterations == maxNoImprovementIterations * 3) {
+                            switch (rng.nextInt(3)) {
+                                case 0: currentSolution = new ALNSSolution(localBestSolution); break;
+                                case 1: currentSolution = getRandomSolution(); break;
+                                case 2: currentSolution = getOppositeSolution(localBestSolution); break;
+                            }
+                            noImprovementIterations = 0;
+                            lastNeighborhood = null;
+                        } else {
+                            tempSolution = new ALNSSolution(currentSolution);
+                            lastNeighborhood = neigh;
+                        }
+                    }
+
+                    currentPercentage = Math.min(maxPercentage,
+                            minPercentage + (noImprovementIterations / (maxNoImprovementIterations / (maxPercentage - minPercentage))));
+
+                    evaporateWeights(weightedNeighborhoods);
+
+                    if (iteration % migrationInterval == 0) {
+                        ALNSSolution global = globalBest.get();
+                        if (localBestSolution.objectiveValue > global.objectiveValue) {
+                            globalBest.set(new ALNSSolution(localBestSolution));
+                        } else if (global.objectiveValue > localBestSolution.objectiveValue) {
+                            currentSolution = new ALNSSolution(global);
+                            localBestSolution = new ALNSSolution(global);
+                        }
+                    }
+                }
+
+                return localBestSolution;
+            }));
+        }
+
+        for (Future<ALNSSolution> f : futures) {
+            ALNSSolution sol = f.get();
+            ALNSSolution global = globalBest.get();
+            if (sol.objectiveValue > global.objectiveValue) {
+                globalBest.set(sol);
             }
-
-            currentPercentage = Math.min(maxPercentage,
-                    minPercentage + (noImprovementIterations / (maxNoImprovementIterations / (maxPercentage - minPercentage))));
-
-            evaporateWeights(weightedNeighborhoods);
         }
 
         executor.shutdown();
-
-        return bestSolution;
+        return globalBest.get();
     }
 
     private ALNSSolution convertToChallengeSolution(GRBVar[] orderVars, GRBVar[] aisleVars) throws GRBException {
@@ -414,6 +403,7 @@ public class ChallengeSolver {
 
     public Neighborhood selectNeighborhood(
         HashMap<Neighborhood, Double> neighborhoods,
+        List<HashMap<Neighborhood, Integer>> bondingFactors,
         Neighborhood lastNeighborhood) {
 
         Map<Neighborhood, Double> effectiveWeights = new HashMap<>();
@@ -548,25 +538,6 @@ public class ChallengeSolver {
         oppositeSolution.calcItemsLeftInAisles();
 
         return oppositeSolution;
-    }
-
-    private ALNSSolution getHalfSolution(ALNSSolution solution) {
-        List<Integer> selectedOrders = new ArrayList<>(solution.selectedOrders);
-        List<Integer> selectedAisles = new ArrayList<>(solution.selectedAisles);
-
-        Collections.shuffle(selectedOrders);
-        Collections.shuffle(selectedAisles);
-
-        selectedOrders = selectedOrders.subList(0, selectedOrders.size() / 2);
-        selectedAisles = selectedAisles.subList(0, selectedAisles.size() / 2);
-
-        ALNSSolution halfSolution = new ALNSSolution(selectedOrders, selectedAisles);
-
-        boolean feasible = isSolutionFeasible(halfSolution);
-        halfSolution.objectiveValue = feasible ? computeObjectiveFunction(halfSolution) : 0.0;
-        halfSolution.calcItemsLeftInAisles();
-
-        return halfSolution;
     }
 
     class Neighborhood {
@@ -789,6 +760,51 @@ public class ChallengeSolver {
                     break;
                 } else if (currentSolution.itensLeftInAisles.values().stream().allMatch(v -> v >= 0)) {
                     valid = true;
+                }
+            }
+
+            super.move(currentSolution, percentage, randomFactor);
+        }
+    }
+
+    class RemoveOrdersAndAisles extends Neighborhood {
+        public int id = 6;
+
+        @Override
+        public void move(ALNSSolution currentSolution, double percentage, double randomFactor) {
+            if (currentSolution.selectedAisles.size() <= 1 && currentSolution.selectedOrders.isEmpty()) {
+                super.move(currentSolution, percentage, randomFactor);
+                return;
+            }
+
+            if (!currentSolution.selectedAisles.isEmpty()) {
+                Collections.shuffle(currentSolution.selectedAisles, ThreadLocalRandom.current());
+
+                int nToRemoveAisles = (int) Math.ceil(currentSolution.selectedAisles.size() * (percentage / 100.0));
+                nToRemoveAisles = Math.max(1, nToRemoveAisles);
+
+                for (int i = 0; i < nToRemoveAisles && !currentSolution.selectedAisles.isEmpty(); i++) {
+                    int aisle = currentSolution.selectedAisles.remove(0);
+
+                    for (Map.Entry<Integer, Integer> entry : aisles.get(aisle).entrySet()) {
+                        currentSolution.itensLeftInAisles.merge(entry.getKey(), -entry.getValue(), Integer::sum);
+                    }
+                }
+            }
+
+            if (!currentSolution.selectedOrders.isEmpty()) {
+                Collections.shuffle(currentSolution.selectedOrders, ThreadLocalRandom.current());
+
+                int nToRemoveOrders = (int) Math.ceil(currentSolution.selectedOrders.size() * (percentage / 100.0));
+                nToRemoveOrders = Math.max(1, nToRemoveOrders);
+
+                for (int i = 0; i < nToRemoveOrders && !currentSolution.selectedOrders.isEmpty(); i++) {
+                    int order = currentSolution.selectedOrders.remove(0);
+
+                    for (Map.Entry<Integer, Integer> entry : orders.get(order).entrySet()) {
+                        currentSolution.itensLeftInAisles.merge(entry.getKey(), entry.getValue(), Integer::sum);
+                        currentSolution.totalItemsPicked -= entry.getValue();
+                    }
                 }
             }
 
